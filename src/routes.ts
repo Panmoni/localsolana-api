@@ -5,10 +5,46 @@ import * as anchor from '@coral-xyz/anchor';
 
 const router: Router = express.Router();
 
+// Helper to get wallet address from JWT
+const getWalletAddressFromJWT = (req: Request): string | undefined => {
+  const credentials = req.user?.verified_credentials;
+  return credentials?.find((cred: any) => cred.format === 'blockchain')?.address;
+};
+
+// Middleware to check ownership
+const restrictToOwner = (resourceKey: string) => {
+  return async (req: Request, res: Response, next: express.NextFunction) => {
+    const walletAddress = getWalletAddressFromJWT(req);
+    if (!walletAddress) {
+      return res.status(403).json({ error: 'No wallet address in token' });
+    }
+    const resourceId = req.params.id || req.body[resourceKey];
+    try {
+      const result = await query(`SELECT wallet_address FROM accounts WHERE id = $1`, [resourceId]);
+      if (result.length === 0) {
+        return res.status(404).json({ error: 'Resource not found' });
+      }
+      if (result[0].wallet_address !== walletAddress) {
+        return res.status(403).json({ error: 'Unauthorized: You can only manage your own resources' });
+      }
+      next();
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  };
+};
+
 // 1. Accounts Endpoints
 // Create a new account
-router.post('/accounts', async (req: Request, res: Response) => {
+router.post('/accounts', async (req: Request, res: Response): Promise<void> => {
   const { wallet_address, username, email } = req.body;
+
+  const jwtWalletAddress = getWalletAddressFromJWT(req);
+  if (wallet_address !== jwtWalletAddress) {
+    res.status(403).json({ error: 'Wallet address must match authenticated user' });
+    return;
+  }
+
   try {
     const result = await query(
       'INSERT INTO accounts (wallet_address, username, email) VALUES ($1, $2, $3) RETURNING id',

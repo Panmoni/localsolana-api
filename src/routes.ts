@@ -332,7 +332,7 @@ router.get('/trades', withErrorHandling(async (req: Request, res: Response): Pro
     let sql = 'SELECT * FROM trades WHERE 1=1';
     const params: string[] = [];
     if (status) {
-      sql += ' AND status = $' + (params.length + 1);
+      sql += ' AND overall_status = $' + (params.length + 1);
       params.push(status as string);
     }
     if (user) {

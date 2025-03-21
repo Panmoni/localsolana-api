@@ -484,7 +484,6 @@ router.post('/escrows/fund', withErrorHandling(async (req: Request, res: Respons
     res.status(403).json({ error: 'Seller must match authenticated user' });
     return;
   }
-
   try {
     const escrowPda = PublicKey.findProgramAddressSync(
       [Buffer.from('escrow'), new anchor.BN(escrow_id).toArrayLike(Buffer, 'le', 8), new anchor.BN(trade_id).toArrayLike(Buffer, 'le', 8)],
@@ -497,6 +496,7 @@ router.post('/escrows/fund', withErrorHandling(async (req: Request, res: Respons
     const instruction = await program.methods
       .fundEscrow()
       .accountsPartial({
+        escrow: escrowPda,
         seller: new PublicKey(seller),
         sellerTokenAccount: new PublicKey(seller_token_account),
         escrowTokenAccount: escrowTokenPda,

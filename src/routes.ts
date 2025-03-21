@@ -470,10 +470,6 @@ router.post('/escrows/create', withErrorHandling(async (req: Request, res: Respo
       res.status(500).json({ error: 'Failed to update trade with escrow address' });
       return;
     }
-    await query(
-      'INSERT INTO escrows (trade_id, escrow_address, seller_address, buyer_address, token_type, amount, status, sequential) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (escrow_address) DO NOTHING',
-      [trade_id, escrowPda.toBase58(), seller, buyer, 'USDC', amount, 'CREATED', sequential || false]
-    );
     console.log(`Updated trade: ${updateResult[0].id}, leg1_escrow_address: ${updateResult[0].leg1_escrow_address}`);
     res.json({
       keys: instruction.keys.map((k: anchor.web3.AccountMeta) => ({

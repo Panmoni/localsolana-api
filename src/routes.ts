@@ -100,7 +100,7 @@ const restrictToOwner = (
 
 // 1. Accounts Endpoints
 // Create a new account
-router.post('/accounts', async (req: Request, res: Response): Promise<void> => {
+router.post('/accounts', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { wallet_address, username, email } = req.body;
 
   const jwtWalletAddress = getWalletAddressFromJWT(req);
@@ -122,10 +122,10 @@ router.post('/accounts', async (req: Request, res: Response): Promise<void> => {
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-});
+}));
 
 // Retrieve account details (publicly accessible)
-router.get('/accounts/:id', async (req: Request, res: Response): Promise<void> => {
+router.get('/accounts/:id', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
   try {
     const result = await query('SELECT * FROM accounts WHERE id = $1', [id]);
@@ -137,10 +137,10 @@ router.get('/accounts/:id', async (req: Request, res: Response): Promise<void> =
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-});
+}));
 
 // Update account info (restricted to owner)
-router.put('/accounts/:id', restrictToOwner('account', 'id'), async (req: Request, res: Response): Promise<void> => {
+router.put('/accounts/:id', restrictToOwner('account', 'id'), withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
   const { username, email } = req.body;
   try {
@@ -156,11 +156,11 @@ router.put('/accounts/:id', restrictToOwner('account', 'id'), async (req: Reques
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-});
+}));
 
 // 2. Offers Endpoints
 // Create a new offer (restricted to creator’s account)
-router.post('/offers', async (req: Request, res: Response): Promise<void> => {
+router.post('/offers', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { creator_account_id, offer_type, min_amount } = req.body;
   const jwtWalletAddress = getWalletAddressFromJWT(req);
   if (!jwtWalletAddress) {
@@ -184,10 +184,10 @@ router.post('/offers', async (req: Request, res: Response): Promise<void> => {
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-});
+}));
 
 // List offers (publicly accessible)
-router.get('/offers', async (req: Request, res: Response): Promise<void> => {
+router.get('/offers', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { type, token } = req.query;
   try {
     let sql = 'SELECT * FROM offers WHERE 1=1';
@@ -205,10 +205,10 @@ router.get('/offers', async (req: Request, res: Response): Promise<void> => {
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-});
+}));
 
 // Get offer details (publicly accessible)
-router.get('/offers/:id', async (req: Request, res: Response): Promise<void> => {
+router.get('/offers/:id', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
   try {
     const result = await query('SELECT * FROM offers WHERE id = $1', [id]);
@@ -220,10 +220,10 @@ router.get('/offers/:id', async (req: Request, res: Response): Promise<void> => 
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-});
+}));
 
 // Update an offer (restricted to creator)
-router.put('/offers/:id', restrictToOwner('offer', 'id'), async (req: Request, res: Response): Promise<void> => {
+router.put('/offers/:id', restrictToOwner('offer', 'id'), withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
   const { min_amount } = req.body;
   try {
@@ -239,10 +239,10 @@ router.put('/offers/:id', restrictToOwner('offer', 'id'), async (req: Request, r
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-});
+}));
 
 // Delete an offer (restricted to creator)
-router.delete('/offers/:id', restrictToOwner('offer', 'id'), async (req: Request, res: Response): Promise<void> => {
+router.delete('/offers/:id', restrictToOwner('offer', 'id'), withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
   try {
     const result = await query('DELETE FROM offers WHERE id = $1 RETURNING id', [id]);
@@ -254,7 +254,7 @@ router.delete('/offers/:id', restrictToOwner('offer', 'id'), async (req: Request
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-});
+}));
 
 // 3. Trades Endpoints
 // Initiate a trade (requires JWT but no ownership check yet—open to any authenticated user)
@@ -326,7 +326,7 @@ router.post(
 );
 
 // List trades (publicly accessible with filters)
-router.get('/trades', async (req: Request, res: Response): Promise<void> => {
+router.get('/trades', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { status, user } = req.query;
   try {
     let sql = 'SELECT * FROM trades WHERE 1=1';
@@ -344,10 +344,10 @@ router.get('/trades', async (req: Request, res: Response): Promise<void> => {
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-});
+}));
 
 // Get trade details (publicly accessible)
-router.get('/trades/:id', async (req: Request, res: Response): Promise<void> => {
+router.get('/trades/:id', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
   try {
     const result = await query('SELECT * FROM trades WHERE id = $1', [id]);
@@ -359,11 +359,11 @@ router.get('/trades/:id', async (req: Request, res: Response): Promise<void> => 
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-});
+}));
 
 // 4. Escrows Endpoints
 // Trigger create_escrow on Solana (requires JWT, no ownership check yet)
-router.post('/escrows/create', async (req: Request, res: Response): Promise<void> => {
+router.post('/escrows/create', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { trade_id, escrow_id, seller, buyer, amount, sequential, sequential_escrow_address } = req.body;
   const jwtWalletAddress = getWalletAddressFromJWT(req);
   if (!jwtWalletAddress) {
@@ -398,10 +398,10 @@ router.post('/escrows/create', async (req: Request, res: Response): Promise<void
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-});
+}));
 
 // Trigger deposit_funds on Solana (requires JWT, no ownership check yet)
-router.post('/escrows/fund', async (req: Request, res: Response): Promise<void> => {
+router.post('/escrows/fund', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { escrow_id, trade_id, seller, seller_token_account, token_mint } = req.body;
   const jwtWalletAddress = getWalletAddressFromJWT(req);
   if (!jwtWalletAddress) {
@@ -442,10 +442,10 @@ router.post('/escrows/fund', async (req: Request, res: Response): Promise<void> 
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-});
+}));
 
 // Trigger release_funds (requires JWT, no ownership check yet)
-router.post('/escrows/release', async (req: Request, res: Response): Promise<void> => {
+router.post('/escrows/release', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { escrow_id, trade_id, authority, buyer_token_account, arbitrator_token_account, sequential_escrow_token_account } = req.body;
   const jwtWalletAddress = getWalletAddressFromJWT(req);
   if (!jwtWalletAddress) {
@@ -485,10 +485,10 @@ router.post('/escrows/release', async (req: Request, res: Response): Promise<voi
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-});
+}));
 
 // Trigger cancel_escrow (requires JWT, no ownership check yet)
-router.post('/escrows/cancel', async (req: Request, res: Response): Promise<void> => {
+router.post('/escrows/cancel', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { escrow_id, trade_id, seller, authority, seller_token_account } = req.body;
   const jwtWalletAddress = getWalletAddressFromJWT(req);
   if (!jwtWalletAddress) {
@@ -527,10 +527,10 @@ router.post('/escrows/cancel', async (req: Request, res: Response): Promise<void
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-});
+}));
 
 // Trigger dispute_escrow (requires JWT, no ownership check yet)
-router.post('/escrows/dispute', async (req: Request, res: Response): Promise<void> => {
+router.post('/escrows/dispute', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { escrow_id, trade_id, disputing_party, disputing_party_token_account, evidence_hash } = req.body;
   const jwtWalletAddress = getWalletAddressFromJWT(req);
   if (!jwtWalletAddress) {
@@ -576,6 +576,6 @@ router.post('/escrows/dispute', async (req: Request, res: Response): Promise<voi
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-});
+}));
 
 export default router;

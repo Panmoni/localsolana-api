@@ -113,15 +113,12 @@ router.post('/accounts', withErrorHandling(async (req: Request, res: Response): 
     return;
   }
 
-  try {
-    const result = await query(
-      'INSERT INTO accounts (wallet_address, username, email) VALUES ($1, $2, $3) RETURNING id',
-      [wallet_address, username, email]
-    );
-    res.status(201).json({ id: result[0].id });
-  } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
-  }
+  const result = await query(
+    'INSERT INTO accounts (wallet_address, username, email) VALUES ($1, $2, $3) RETURNING id',
+    [wallet_address, username, email]
+  );
+  res.status(201).json({ id: result[0].id });
+
 }));
 
 // Retrieve account details (publicly accessible)

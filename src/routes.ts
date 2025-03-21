@@ -5,6 +5,39 @@ import * as anchor from '@coral-xyz/anchor';
 
 const router: Router = express.Router();
 
+
+// Middleware to require JWT
+const requireJWT = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  const jwtWalletAddress = getWalletAddressFromJWT(req);
+  if (!jwtWalletAddress) {
+    res.status(403).json({ error: 'Authentication required' });
+    return;
+  }
+  next();
+};
+
+router.use(requireJWT);
+
+const logError = (message: string, error: unknown) => {
+  console.error(`[${new Date().toISOString()}] ${message}:`, error);
+};
+
+const withErrorHandling = (handler: (req: Request, res: Response) => Promise<void>) => {
+  return async (req: Request, res: Response) => {
+    try {
+      await handler(req, res);
+    } catch (err) {
+      const error = err as Error & { code?: string };
+      logError(`Route ${req.method} ${req.path} failed`, error);
+      if (error.code === '23505') { // PostgreSQL duplicate key error
+        res.status(409).json({ error: 'Resource already exists with that key' });
+      } else {
+        res.status(500).json({ error: error.message || 'Internal server error' });
+      }
+    }
+  };
+};
+
 // Helper to get wallet address from JWT
 const getWalletAddressFromJWT = (req: Request): string | undefined => {
   const credentials = req.user?.verified_credentials;
@@ -12,22 +45,50 @@ const getWalletAddressFromJWT = (req: Request): string | undefined => {
 };
 
 // Middleware to check ownership
-const restrictToOwner = (resourceKey: string) => {
-  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+// Updated middleware
+const restrictToOwner = (
+  resourceType: "account" | "offer",
+  resourceKey: string
+) => {
+  return async (
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> => {
     const walletAddress = getWalletAddressFromJWT(req);
     if (!walletAddress) {
-      res.status(403).json({ error: 'No wallet address in token' });
+      res.status(403).json({ error: "No wallet address in token" });
       return;
     }
     const resourceId = req.params.id || req.body[resourceKey];
     try {
-      const result = await query(`SELECT wallet_address FROM accounts WHERE id = $1`, [resourceId]);
+      const table = resourceType === "account" ? "accounts" : "offers";
+      const column =
+        resourceType === "account" ? "wallet_address" : "creator_account_id";
+      const result = await query(
+        `SELECT ${column} FROM ${table} WHERE id = $1`,
+        [resourceId]
+      );
       if (result.length === 0) {
-        res.status(404).json({ error: 'Resource not found' });
+        res.status(404).json({ error: `${resourceType} not found` });
         return;
       }
-      if (result[0].wallet_address !== walletAddress) {
-        res.status(403).json({ error: 'Unauthorized: You can only manage your own resources' });
+      const ownerField =
+        resourceType === "account"
+          ? result[0].wallet_address
+          : result[0].creator_account_id;
+      const accountCheck =
+        resourceType === "offer"
+          ? await query("SELECT wallet_address FROM accounts WHERE id = $1", [
+              ownerField,
+            ])
+          : [{ wallet_address: ownerField }];
+      if (accountCheck[0].wallet_address !== walletAddress) {
+        res
+          .status(403)
+          .json({
+            error: `Unauthorized: You can only manage your own ${resourceType}s`,
+          });
         return;
       }
       next();
@@ -79,7 +140,7 @@ router.get('/accounts/:id', async (req: Request, res: Response): Promise<void> =
 });
 
 // Update account info (restricted to owner)
-router.put('/accounts/:id', restrictToOwner('id'), async (req: Request, res: Response): Promise<void> => {
+router.put('/accounts/:id', restrictToOwner('account', 'id'), async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
   const { username, email } = req.body;
   try {
@@ -162,7 +223,7 @@ router.get('/offers/:id', async (req: Request, res: Response): Promise<void> => 
 });
 
 // Update an offer (restricted to creator)
-router.put('/offers/:id', restrictToOwner('creator_account_id'), async (req: Request, res: Response): Promise<void> => {
+router.put('/offers/:id', restrictToOwner('offer', 'id'), async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
   const { min_amount } = req.body;
   try {
@@ -181,7 +242,7 @@ router.put('/offers/:id', restrictToOwner('creator_account_id'), async (req: Req
 });
 
 // Delete an offer (restricted to creator)
-router.delete('/offers/:id', restrictToOwner('creator_account_id'), async (req: Request, res: Response): Promise<void> => {
+router.delete('/offers/:id', restrictToOwner('offer', 'id'), async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
   try {
     const result = await query('DELETE FROM offers WHERE id = $1 RETURNING id', [id]);
@@ -197,24 +258,72 @@ router.delete('/offers/:id', restrictToOwner('creator_account_id'), async (req: 
 
 // 3. Trades Endpoints
 // Initiate a trade (requires JWT but no ownership check yet—open to any authenticated user)
-router.post('/trades', async (req: Request, res: Response): Promise<void> => {
-  const { leg1_offer_id, leg2_offer_id } = req.body;
-  const jwtWalletAddress = getWalletAddressFromJWT(req);
-  if (!jwtWalletAddress) {
-    res.status(403).json({ error: 'No wallet address in token' });
-    return;
-  }
+router.post(
+  "/trades",
+  withErrorHandling(async (req: Request, res: Response): Promise<void> => {
+    const {
+      leg1_offer_id,
+      leg2_offer_id,
+      from_fiat_currency,
+      destination_fiat_currency,
+      from_bank,
+      destination_bank,
+    } = req.body;
+    const jwtWalletAddress = getWalletAddressFromJWT(req);
+    if (!jwtWalletAddress) {
+      res.status(403).json({ error: "No wallet address in token" });
+      return;
+    }
 
-  try {
-    const result = await query(
-      'INSERT INTO trades (leg1_offer_id, leg2_offer_id, status) VALUES ($1, $2, $3) RETURNING id',
-      [leg1_offer_id, leg2_offer_id || null, 'PENDING']
+    // Fetch offer details for leg1
+    const leg1Offer = await query("SELECT * FROM offers WHERE id = $1", [
+      leg1_offer_id,
+    ]);
+    if (leg1Offer.length === 0) {
+      res.status(404).json({ error: "Leg 1 offer not found" });
+      return;
+    }
+
+    const leg1Creator = await query(
+      "SELECT wallet_address FROM accounts WHERE id = $1",
+      [leg1Offer[0].creator_account_id]
     );
-    res.status(201).json({ id: result[0].id });
-  } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
-  }
-});
+    const isSeller = leg1Offer[0].offer_type === "SELL";
+    const leg1SellerAccountId = isSeller
+      ? leg1Offer[0].creator_account_id
+      : null;
+    const leg1BuyerAccountId = isSeller
+      ? null
+      : leg1Offer[0].creator_account_id;
+
+    try {
+      const result = await query(
+        `INSERT INTO trades (
+        leg1_offer_id, leg2_offer_id, overall_status, from_fiat_currency, destination_fiat_currency, from_bank, destination_bank,
+        leg1_state, leg1_seller_account_id, leg1_buyer_account_id, leg1_crypto_token, leg1_crypto_amount, leg1_fiat_currency
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
+        [
+          leg1_offer_id,
+          leg2_offer_id || null,
+          "IN_PROGRESS",
+          from_fiat_currency || "USD",
+          destination_fiat_currency || "USD",
+          from_bank || null,
+          destination_bank || null,
+          "CREATED",
+          leg1SellerAccountId,
+          leg1BuyerAccountId,
+          leg1Offer[0].token,
+          leg1Offer[0].min_amount,
+          "USD",
+        ]
+      );
+      res.status(201).json({ id: result[0].id });
+    } catch (err) {
+      throw err; // Caught by withErrorHandling
+    }
+  })
+);
 
 // List trades (publicly accessible with filters)
 router.get('/trades', async (req: Request, res: Response): Promise<void> => {

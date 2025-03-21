@@ -1,4 +1,4 @@
-import express, { Request, Response, Router, RequestHandler } from 'express';
+import express, { Request, Response, Router, NextFunction } from 'express';
 import { query } from './db';
 import { program, PublicKey } from './solana';
 import * as anchor from '@coral-xyz/anchor';
@@ -13,19 +13,22 @@ const getWalletAddressFromJWT = (req: Request): string | undefined => {
 
 // Middleware to check ownership
 const restrictToOwner = (resourceKey: string) => {
-  return async (req: Request, res: Response, next: express.NextFunction) => {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const walletAddress = getWalletAddressFromJWT(req);
     if (!walletAddress) {
-      return res.status(403).json({ error: 'No wallet address in token' });
+      res.status(403).json({ error: 'No wallet address in token' });
+      return;
     }
     const resourceId = req.params.id || req.body[resourceKey];
     try {
       const result = await query(`SELECT wallet_address FROM accounts WHERE id = $1`, [resourceId]);
       if (result.length === 0) {
-        return res.status(404).json({ error: 'Resource not found' });
+        res.status(404).json({ error: 'Resource not found' });
+        return;
       }
       if (result[0].wallet_address !== walletAddress) {
-        return res.status(403).json({ error: 'Unauthorized: You can only manage your own resources' });
+        res.status(403).json({ error: 'Unauthorized: You can only manage your own resources' });
+        return;
       }
       next();
     } catch (err) {
@@ -40,6 +43,10 @@ router.post('/accounts', async (req: Request, res: Response): Promise<void> => {
   const { wallet_address, username, email } = req.body;
 
   const jwtWalletAddress = getWalletAddressFromJWT(req);
+  if (!jwtWalletAddress) {
+    res.status(403).json({ error: 'No wallet address in token' });
+    return;
+  }
   if (wallet_address !== jwtWalletAddress) {
     res.status(403).json({ error: 'Wallet address must match authenticated user' });
     return;
@@ -56,19 +63,23 @@ router.post('/accounts', async (req: Request, res: Response): Promise<void> => {
   }
 });
 
-// Retrieve account details
-router.get('/accounts/:id', async (req: Request, res: Response) => {
+// Retrieve account details (publicly accessible)
+router.get('/accounts/:id', async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
   try {
     const result = await query('SELECT * FROM accounts WHERE id = $1', [id]);
-    res.json(result[0] || { error: 'Account not found' });
+    if (result.length === 0) {
+      res.status(404).json({ error: 'Account not found' });
+      return;
+    }
+    res.json(result[0]);
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
 });
 
-// Update account info
-router.put('/accounts/:id', (async (req: Request, res: Response) => {
+// Update account info (restricted to owner)
+router.put('/accounts/:id', restrictToOwner('id'), async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
   const { username, email } = req.body;
   try {
@@ -76,18 +87,34 @@ router.put('/accounts/:id', (async (req: Request, res: Response) => {
       'UPDATE accounts SET username = COALESCE($1, username), email = COALESCE($2, email) WHERE id = $3 RETURNING id',
       [username || null, email || null, id]
     );
-    if (result.length === 0) return res.status(404).json({ error: 'Account not found' });
+    if (result.length === 0) {
+      res.status(404).json({ error: 'Account not found' });
+      return;
+    }
     res.json({ id: result[0].id });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-}) as RequestHandler);
+});
 
 // 2. Offers Endpoints
-// Create a new offer
-router.post('/offers', async (req: Request, res: Response) => {
+// Create a new offer (restricted to creator’s account)
+router.post('/offers', async (req: Request, res: Response): Promise<void> => {
   const { creator_account_id, offer_type, min_amount } = req.body;
+  const jwtWalletAddress = getWalletAddressFromJWT(req);
+  if (!jwtWalletAddress) {
+    res.status(403).json({ error: 'No wallet address in token' });
+    return;
+  }
+
   try {
+    // Verify the creator_account_id belongs to the authenticated user
+    const accountCheck = await query('SELECT wallet_address FROM accounts WHERE id = $1', [creator_account_id]);
+    if (accountCheck.length === 0 || accountCheck[0].wallet_address !== jwtWalletAddress) {
+      res.status(403).json({ error: 'Unauthorized: You can only create offers for your own account' });
+      return;
+    }
+
     const result = await query(
       'INSERT INTO offers (creator_account_id, offer_type, token, min_amount, max_amount, total_available_amount, rate_adjustment, terms, escrow_deposit_time_limit, fiat_payment_time_limit) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id',
       [creator_account_id, offer_type, 'USDC', min_amount, min_amount * 2, min_amount * 4, 1.05, 'Cash only', '15 minutes', '30 minutes']
@@ -98,8 +125,8 @@ router.post('/offers', async (req: Request, res: Response) => {
   }
 });
 
-// List offers (filterable by type, token, etc.)
-router.get('/offers', async (req: Request, res: Response) => {
+// List offers (publicly accessible)
+router.get('/offers', async (req: Request, res: Response): Promise<void> => {
   const { type, token } = req.query;
   try {
     let sql = 'SELECT * FROM offers WHERE 1=1';
@@ -119,19 +146,23 @@ router.get('/offers', async (req: Request, res: Response) => {
   }
 });
 
-// Get offer details
-router.get('/offers/:id', async (req: Request, res: Response) => {
+// Get offer details (publicly accessible)
+router.get('/offers/:id', async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
   try {
     const result = await query('SELECT * FROM offers WHERE id = $1', [id]);
-    res.json(result[0] || { error: 'Offer not found' });
+    if (result.length === 0) {
+      res.status(404).json({ error: 'Offer not found' });
+      return;
+    }
+    res.json(result[0]);
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-}) as RequestHandler;
+});
 
-// Update an offer
-router.put('/offers/:id', (async (req: Request, res: Response) => {
+// Update an offer (restricted to creator)
+router.put('/offers/:id', restrictToOwner('creator_account_id'), async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
   const { min_amount } = req.body;
   try {
@@ -139,29 +170,41 @@ router.put('/offers/:id', (async (req: Request, res: Response) => {
       'UPDATE offers SET min_amount = COALESCE($1, min_amount) WHERE id = $2 RETURNING id',
       [min_amount || null, id]
     );
-    if (result.length === 0) return res.status(404).json({ error: 'Offer not found' });
+    if (result.length === 0) {
+      res.status(404).json({ error: 'Offer not found' });
+      return;
+    }
     res.json({ id: result[0].id });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-}) as RequestHandler);
+});
 
-// Delete an offer
-router.delete('/offers/:id', (async (req: Request, res: Response) => {
+// Delete an offer (restricted to creator)
+router.delete('/offers/:id', restrictToOwner('creator_account_id'), async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
   try {
     const result = await query('DELETE FROM offers WHERE id = $1 RETURNING id', [id]);
-    if (result.length === 0) return res.status(404).json({ error: 'Offer not found' });
+    if (result.length === 0) {
+      res.status(404).json({ error: 'Offer not found' });
+      return;
+    }
     res.json({ message: 'Offer deleted' });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
-}) as RequestHandler);
+});
 
 // 3. Trades Endpoints
-// Initiate a trade by selecting leg1_offer_id (and optionally leg2_offer_id for sequential trades)
-router.post('/trades', async (req: Request, res: Response) => {
+// Initiate a trade (requires JWT but no ownership check yet—open to any authenticated user)
+router.post('/trades', async (req: Request, res: Response): Promise<void> => {
   const { leg1_offer_id, leg2_offer_id } = req.body;
+  const jwtWalletAddress = getWalletAddressFromJWT(req);
+  if (!jwtWalletAddress) {
+    res.status(403).json({ error: 'No wallet address in token' });
+    return;
+  }
+
   try {
     const result = await query(
       'INSERT INTO trades (leg1_offer_id, leg2_offer_id, status) VALUES ($1, $2, $3) RETURNING id',
@@ -173,8 +216,8 @@ router.post('/trades', async (req: Request, res: Response) => {
   }
 });
 
-// List trades (filter by status, user, etc.)
-router.get('/trades', async (req: Request, res: Response) => {
+// List trades (publicly accessible with filters)
+router.get('/trades', async (req: Request, res: Response): Promise<void> => {
   const { status, user } = req.query;
   try {
     let sql = 'SELECT * FROM trades WHERE 1=1';
@@ -194,21 +237,31 @@ router.get('/trades', async (req: Request, res: Response) => {
   }
 });
 
-// Get trade details
-router.get('/trades/:id', async (req: Request, res: Response) => {
+// Get trade details (publicly accessible)
+router.get('/trades/:id', async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
   try {
     const result = await query('SELECT * FROM trades WHERE id = $1', [id]);
-    res.json(result[0] || { error: 'Trade not found' });
+    if (result.length === 0) {
+      res.status(404).json({ error: 'Trade not found' });
+      return;
+    }
+    res.json(result[0]);
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
 });
 
 // 4. Escrows Endpoints
-// Trigger create_escrow on Solana
-router.post('/escrows/create', async (req: Request, res: Response) => {
+// Trigger create_escrow on Solana (requires JWT, no ownership check yet)
+router.post('/escrows/create', async (req: Request, res: Response): Promise<void> => {
   const { trade_id, escrow_id, seller, buyer, amount, sequential, sequential_escrow_address } = req.body;
+  const jwtWalletAddress = getWalletAddressFromJWT(req);
+  if (!jwtWalletAddress) {
+    res.status(403).json({ error: 'No wallet address in token' });
+    return;
+  }
+
   try {
     const instruction = await program.methods
       .createEscrow(
@@ -238,9 +291,15 @@ router.post('/escrows/create', async (req: Request, res: Response) => {
   }
 });
 
-// Trigger deposit_funds on Solana
-router.post('/escrows/fund', async (req: Request, res: Response) => {
+// Trigger deposit_funds on Solana (requires JWT, no ownership check yet)
+router.post('/escrows/fund', async (req: Request, res: Response): Promise<void> => {
   const { escrow_id, trade_id, seller, seller_token_account, token_mint } = req.body;
+  const jwtWalletAddress = getWalletAddressFromJWT(req);
+  if (!jwtWalletAddress) {
+    res.status(403).json({ error: 'No wallet address in token' });
+    return;
+  }
+
   try {
     const escrowPda = PublicKey.findProgramAddressSync(
       [Buffer.from('escrow'), new anchor.BN(escrow_id).toArrayLike(Buffer, 'le', 8), new anchor.BN(trade_id).toArrayLike(Buffer, 'le', 8)],
@@ -276,9 +335,15 @@ router.post('/escrows/fund', async (req: Request, res: Response) => {
   }
 });
 
-// Trigger release_funds (with sequential flag) on Solana
-router.post('/escrows/release', async (req: Request, res: Response) => {
+// Trigger release_funds (requires JWT, no ownership check yet)
+router.post('/escrows/release', async (req: Request, res: Response): Promise<void> => {
   const { escrow_id, trade_id, authority, buyer_token_account, arbitrator_token_account, sequential_escrow_token_account } = req.body;
+  const jwtWalletAddress = getWalletAddressFromJWT(req);
+  if (!jwtWalletAddress) {
+    res.status(403).json({ error: 'No wallet address in token' });
+    return;
+  }
+
   try {
     const escrowPda = PublicKey.findProgramAddressSync(
       [Buffer.from('escrow'), new anchor.BN(escrow_id).toArrayLike(Buffer, 'le', 8), new anchor.BN(trade_id).toArrayLike(Buffer, 'le', 8)],
@@ -313,9 +378,15 @@ router.post('/escrows/release', async (req: Request, res: Response) => {
   }
 });
 
-// Trigger cancel_escrow
-router.post('/escrows/cancel', async (req: Request, res: Response) => {
+// Trigger cancel_escrow (requires JWT, no ownership check yet)
+router.post('/escrows/cancel', async (req: Request, res: Response): Promise<void> => {
   const { escrow_id, trade_id, seller, authority, seller_token_account } = req.body;
+  const jwtWalletAddress = getWalletAddressFromJWT(req);
+  if (!jwtWalletAddress) {
+    res.status(403).json({ error: 'No wallet address in token' });
+    return;
+  }
+
   try {
     const escrowPda = PublicKey.findProgramAddressSync(
       [Buffer.from('escrow'), new anchor.BN(escrow_id).toArrayLike(Buffer, 'le', 8), new anchor.BN(trade_id).toArrayLike(Buffer, 'le', 8)],
@@ -349,9 +420,15 @@ router.post('/escrows/cancel', async (req: Request, res: Response) => {
   }
 });
 
-// Trigger dispute_escrow
-router.post('/escrows/dispute', async (req: Request, res: Response) => {
+// Trigger dispute_escrow (requires JWT, no ownership check yet)
+router.post('/escrows/dispute', async (req: Request, res: Response): Promise<void> => {
   const { escrow_id, trade_id, disputing_party, disputing_party_token_account, evidence_hash } = req.body;
+  const jwtWalletAddress = getWalletAddressFromJWT(req);
+  if (!jwtWalletAddress) {
+    res.status(403).json({ error: 'No wallet address in token' });
+    return;
+  }
+
   try {
     const escrowPda = PublicKey.findProgramAddressSync(
       [Buffer.from('escrow'), new anchor.BN(escrow_id).toArrayLike(Buffer, 'le', 8), new anchor.BN(trade_id).toArrayLike(Buffer, 'le', 8)],

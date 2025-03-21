@@ -155,6 +155,17 @@ router.put('/accounts/:id', restrictToOwner('account', 'id'), withErrorHandling(
   }
 }));
 
+// Get account details for authenticated user
+router.get('/accounts/me', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
+  const walletAddress = getWalletAddressFromJWT(req);
+  const result = await query('SELECT * FROM accounts WHERE wallet_address = $1', [walletAddress]);
+  if (result.length === 0) {
+    res.status(404).json({ error: 'Account not found' });
+    return;
+  }
+  res.json(result[0]);
+}));
+
 // 2. Offers Endpoints
 // Create a new offer (restricted to creator’s account)
 router.post('/offers', withErrorHandling(async (req: Request, res: Response): Promise<void> => {

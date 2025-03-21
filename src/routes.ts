@@ -5,7 +5,6 @@ import * as anchor from '@coral-xyz/anchor';
 
 const router: Router = express.Router();
 
-
 // Middleware to require JWT
 const requireJWT = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   const jwtWalletAddress = getWalletAddressFromJWT(req);
@@ -339,10 +338,13 @@ router.post(
         "USD",
       ]
     );
-    res.status(201).json({ id: result[0].id });
-  })
+    await query(
+    'UPDATE offers SET total_available_amount = total_available_amount - $1 WHERE id = $2',
+    [leg1Offer[0].min_amount, leg1_offer_id]
+  );
+      res.status(201).json({ id: result[0].id });
+    })
 );
-
 
 // List trades (publicly accessible with filters)
 router.get('/trades', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
@@ -363,6 +365,16 @@ router.get('/trades', withErrorHandling(async (req: Request, res: Response): Pro
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
+}));
+
+// List trades for authenticated user
+router.get('/my/trades', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
+  const jwtWalletAddress = getWalletAddressFromJWT(req);
+  const result = await query(
+    'SELECT t.* FROM trades t JOIN accounts a ON t.leg1_seller_account_id = a.id OR t.leg1_buyer_account_id = a.id WHERE a.wallet_address = $1',
+    [jwtWalletAddress]
+  );
+  res.json(result);
 }));
 
 // Get trade details (publicly accessible)

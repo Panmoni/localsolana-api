@@ -111,6 +111,10 @@ router.post('/accounts', withErrorHandling(async (req: Request, res: Response): 
     res.status(403).json({ error: 'Wallet address must match authenticated user' });
     return;
   }
+  if (username && username.length > 25) {
+    res.status(400).json({ error: 'Username must not exceed 50 characters' });
+    return;
+  }
 
   const result = await query(
     'INSERT INTO accounts (wallet_address, username, email) VALUES ($1, $2, $3) RETURNING id',
@@ -182,6 +186,11 @@ router.post('/offers', withErrorHandling(async (req: Request, res: Response): Pr
     res.status(400).json({ error: 'Min amount must be a non-negative number' });
     return;
   }
+  if (min_amount > 1000000) {
+    res.status(400).json({ error: 'Min amount must not exceed 1,000,000' });
+    return;
+  }
+
   const accountCheck = await query('SELECT wallet_address FROM accounts WHERE id = $1', [creator_account_id]);
   if (accountCheck.length === 0 || accountCheck[0].wallet_address !== jwtWalletAddress) {
     res.status(403).json({ error: 'Unauthorized: You can only create offers for your own account' });
@@ -409,9 +418,9 @@ router.put('/trades/:id', withErrorHandling(async (req: Request, res: Response):
     return;
   }
 
-  const offer = await query('SELECT creator_account_id FROM offers WHERE id = $1', [trade[0].leg1_offer_id]);
-  const creatorWallet = await query('SELECT wallet_address FROM accounts WHERE id = $1', [offer[0].creator_account_id]);
-  if (creatorWallet[0].wallet_address !== jwtWalletAddress) {
+  const sellerWallet = await query('SELECT wallet_address FROM accounts WHERE id = $1', [trade[0].leg1_seller_account_id]);
+  const buyerWallet = await query('SELECT wallet_address FROM accounts WHERE id = $1', [trade[0].leg1_buyer_account_id]);
+  if (sellerWallet[0].wallet_address !== jwtWalletAddress && (!buyerWallet[0] || buyerWallet[0].wallet_address !== jwtWalletAddress)) {
     res.status(403).json({ error: 'Unauthorized: Only trade participants can update' });
     return;
   }
@@ -559,6 +568,15 @@ router.get('/escrows/:trade_id', withErrorHandling(async (req: Request, res: Res
     return;
   }
   res.json(result[0]);
+}));
+
+router.get('/my/escrows', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
+  const jwtWalletAddress = getWalletAddressFromJWT(req);
+  const result = await query(
+    'SELECT e.* FROM escrows e WHERE e.seller_address = $1 OR e.buyer_address = $1',
+    [jwtWalletAddress]
+  );
+  res.json(result);
 }));
 
 // Trigger release_funds (requires JWT, no ownership check yet)

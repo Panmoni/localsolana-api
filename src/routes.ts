@@ -369,6 +369,33 @@ router.get('/trades/:id', withErrorHandling(async (req: Request, res: Response):
   }
 }));
 
+// Update trade info (restricted to trade participants)
+router.put('/trades/:id', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const { leg1_state, overall_status } = req.body;
+  const jwtWalletAddress = getWalletAddressFromJWT(req);
+  if (!jwtWalletAddress) {
+    res.status(403).json({ error: 'No wallet address in token' });
+    return;
+  }
+  const trade = await query('SELECT * FROM trades WHERE id = $1', [id]);
+  if (trade.length === 0) {
+    res.status(404).json({ error: 'Trade not found' });
+    return;
+  }
+  const offer = await query('SELECT creator_account_id FROM offers WHERE id = $1', [trade[0].leg1_offer_id]);
+  const creatorWallet = await query('SELECT wallet_address FROM accounts WHERE id = $1', [offer[0].creator_account_id]);
+  if (creatorWallet[0].wallet_address !== jwtWalletAddress) {
+    res.status(403).json({ error: 'Unauthorized: Only trade participants can update' });
+    return;
+  }
+  const result = await query(
+    'UPDATE trades SET leg1_state = COALESCE($1, leg1_state), overall_status = COALESCE($2, overall_status) WHERE id = $3 RETURNING id',
+    [leg1_state, overall_status, id]
+  );
+  res.json({ id: result[0].id });
+}));
+
 // 4. Escrows Endpoints
 // Trigger create_escrow on Solana (requires JWT, no ownership check yet)
 router.post('/escrows/create', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
@@ -459,6 +486,17 @@ router.post('/escrows/fund', withErrorHandling(async (req: Request, res: Respons
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
   }
+}));
+
+// Retrieve escrow details (publicly accessible)
+router.get('/escrows/:trade_id', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
+  const { trade_id } = req.params;
+  const result = await query('SELECT * FROM escrows WHERE trade_id = $1', [trade_id]);
+  if (result.length === 0) {
+    res.status(404).json({ error: 'Escrow not found' });
+    return;
+  }
+  res.json(result[0]);
 }));
 
 // Trigger release_funds (requires JWT, no ownership check yet)

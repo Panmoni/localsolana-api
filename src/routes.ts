@@ -373,9 +373,14 @@ router.get('/trades/:id', withErrorHandling(async (req: Request, res: Response):
 // Trigger create_escrow on Solana (requires JWT, no ownership check yet)
 router.post('/escrows/create', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { trade_id, escrow_id, seller, buyer, amount, sequential, sequential_escrow_address } = req.body;
+
   const jwtWalletAddress = getWalletAddressFromJWT(req);
   if (!jwtWalletAddress) {
     res.status(403).json({ error: 'No wallet address in token' });
+    return;
+  }
+  if (seller !== jwtWalletAddress) {
+    res.status(403).json({ error: 'Seller must match authenticated user' });
     return;
   }
 
@@ -414,6 +419,10 @@ router.post('/escrows/fund', withErrorHandling(async (req: Request, res: Respons
   const jwtWalletAddress = getWalletAddressFromJWT(req);
   if (!jwtWalletAddress) {
     res.status(403).json({ error: 'No wallet address in token' });
+    return;
+  }
+  if (seller !== jwtWalletAddress) {
+    res.status(403).json({ error: 'Seller must match authenticated user' });
     return;
   }
 
@@ -455,9 +464,14 @@ router.post('/escrows/fund', withErrorHandling(async (req: Request, res: Respons
 // Trigger release_funds (requires JWT, no ownership check yet)
 router.post('/escrows/release', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { escrow_id, trade_id, authority, buyer_token_account, arbitrator_token_account, sequential_escrow_token_account } = req.body;
+
   const jwtWalletAddress = getWalletAddressFromJWT(req);
   if (!jwtWalletAddress) {
     res.status(403).json({ error: 'No wallet address in token' });
+    return;
+  }
+  if (authority !== jwtWalletAddress) {
+    res.status(403).json({ error: 'Authority must match authenticated user (seller)' });
     return;
   }
 
@@ -498,9 +512,14 @@ router.post('/escrows/release', withErrorHandling(async (req: Request, res: Resp
 // Trigger cancel_escrow (requires JWT, no ownership check yet)
 router.post('/escrows/cancel', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { escrow_id, trade_id, seller, authority, seller_token_account } = req.body;
+
   const jwtWalletAddress = getWalletAddressFromJWT(req);
   if (!jwtWalletAddress) {
     res.status(403).json({ error: 'No wallet address in token' });
+    return;
+  }
+  if (seller !== jwtWalletAddress || authority !== jwtWalletAddress) {
+    res.status(403).json({ error: 'Seller and authority must match authenticated user' });
     return;
   }
 
@@ -540,9 +559,14 @@ router.post('/escrows/cancel', withErrorHandling(async (req: Request, res: Respo
 // Trigger dispute_escrow (requires JWT, no ownership check yet)
 router.post('/escrows/dispute', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { escrow_id, trade_id, disputing_party, disputing_party_token_account, evidence_hash } = req.body;
+
   const jwtWalletAddress = getWalletAddressFromJWT(req);
   if (!jwtWalletAddress) {
     res.status(403).json({ error: 'No wallet address in token' });
+    return;
+  }
+  if (disputing_party !== jwtWalletAddress) {
+    res.status(403).json({ error: 'Disputing party must match authenticated user' });
     return;
   }
 

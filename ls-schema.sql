@@ -54,7 +54,7 @@ CREATE TABLE trades (
     updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
 
     -- Leg 1 (Buy Leg)
-    leg1_state VARCHAR(20) NOT NULL CHECK (leg1_state IN ('CREATED', 'AWAITING_FIAT_PAYMENT', 'PENDING_CRYPTO_RELEASE', 'DISPUTED', 'COMPLETED', 'CANCELLED')),
+    leg1_state VARCHAR(25) NOT NULL CHECK (leg1_state IN ('CREATED', 'AWAITING_FIAT_PAYMENT', 'PENDING_CRYPTO_RELEASE', 'DISPUTED', 'COMPLETED', 'CANCELLED')),
     leg1_seller_account_id INTEGER REFERENCES accounts(id),
     leg1_buyer_account_id INTEGER REFERENCES accounts(id),
     leg1_crypto_token VARCHAR(10) NOT NULL DEFAULT 'USDC',

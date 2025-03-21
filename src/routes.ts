@@ -284,7 +284,6 @@ router.post(
       return;
     }
 
-    // Fetch offer details for leg1
     const leg1Offer = await query("SELECT * FROM offers WHERE id = $1", [
       leg1_offer_id,
     ]);
@@ -293,46 +292,57 @@ router.post(
       return;
     }
 
-    const leg1Creator = await query(
-      "SELECT wallet_address FROM accounts WHERE id = $1",
+    if (leg1Offer[0].total_available_amount < leg1Offer[0].min_amount) {
+      res.status(400).json({ error: 'Offer no longer available' });
+      return;
+    }
+
+    const creatorAccount = await query(
+      "SELECT id, wallet_address FROM accounts WHERE id = $1",
       [leg1Offer[0].creator_account_id]
     );
+    const buyerAccount = await query(
+      "SELECT id FROM accounts WHERE wallet_address = $1",
+      [jwtWalletAddress]
+    );
+    if (buyerAccount.length === 0) {
+      res.status(403).json({ error: "Buyer account not found" });
+      return;
+    }
+
     const isSeller = leg1Offer[0].offer_type === "SELL";
     const leg1SellerAccountId = isSeller
-      ? leg1Offer[0].creator_account_id
-      : null;
+      ? creatorAccount[0].id
+      : buyerAccount[0].id;
     const leg1BuyerAccountId = isSeller
-      ? null
-      : leg1Offer[0].creator_account_id;
+      ? buyerAccount[0].id
+      : creatorAccount[0].id;
 
-    try {
-      const result = await query(
-        `INSERT INTO trades (
-        leg1_offer_id, leg2_offer_id, overall_status, from_fiat_currency, destination_fiat_currency, from_bank, destination_bank,
-        leg1_state, leg1_seller_account_id, leg1_buyer_account_id, leg1_crypto_token, leg1_crypto_amount, leg1_fiat_currency
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
-        [
-          leg1_offer_id,
-          leg2_offer_id || null,
-          "IN_PROGRESS",
-          from_fiat_currency || "USD",
-          destination_fiat_currency || "USD",
-          from_bank || null,
-          destination_bank || null,
-          "CREATED",
-          leg1SellerAccountId,
-          leg1BuyerAccountId,
-          leg1Offer[0].token,
-          leg1Offer[0].min_amount,
-          "USD",
-        ]
-      );
-      res.status(201).json({ id: result[0].id });
-    } catch (err) {
-      throw err; // Caught by withErrorHandling
-    }
+    const result = await query(
+      `INSERT INTO trades (
+      leg1_offer_id, leg2_offer_id, overall_status, from_fiat_currency, destination_fiat_currency, from_bank, destination_bank,
+      leg1_state, leg1_seller_account_id, leg1_buyer_account_id, leg1_crypto_token, leg1_crypto_amount, leg1_fiat_currency
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
+      [
+        leg1_offer_id,
+        leg2_offer_id || null,
+        "IN_PROGRESS",
+        from_fiat_currency || "USD",
+        destination_fiat_currency || "USD",
+        from_bank || null,
+        destination_bank || null,
+        "CREATED",
+        leg1SellerAccountId,
+        leg1BuyerAccountId,
+        leg1Offer[0].token,
+        leg1Offer[0].min_amount,
+        "USD",
+      ]
+    );
+    res.status(201).json({ id: result[0].id });
   })
 );
+
 
 // List trades (publicly accessible with filters)
 router.get('/trades', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
@@ -409,7 +419,6 @@ router.put('/trades/:id', withErrorHandling(async (req: Request, res: Response):
 // Trigger create_escrow on Solana (requires JWT, no ownership check yet)
 router.post('/escrows/create', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { trade_id, escrow_id, seller, buyer, amount, sequential, sequential_escrow_address } = req.body;
-
   const jwtWalletAddress = getWalletAddressFromJWT(req);
   if (!jwtWalletAddress) {
     res.status(403).json({ error: 'No wallet address in token' });
@@ -419,14 +428,16 @@ router.post('/escrows/create', withErrorHandling(async (req: Request, res: Respo
     res.status(403).json({ error: 'Seller must match authenticated user' });
     return;
   }
-
+  if (!Number.isInteger(escrow_id) || !Number.isInteger(trade_id) || !Number.isInteger(amount)) {
+    res.status(400).json({ error: 'escrow_id, trade_id, and amount must be integers' });
+    return;
+  }
   try {
     const tradeCheck = await query('SELECT id FROM trades WHERE id = $1', [trade_id]);
     if (tradeCheck.length === 0) {
       res.status(404).json({ error: 'Trade not found' });
       return;
     }
-
     const instruction = await program.methods
       .createEscrow(
         new anchor.BN(escrow_id),
@@ -441,7 +452,6 @@ router.post('/escrows/create', withErrorHandling(async (req: Request, res: Respo
         systemProgram: anchor.web3.SystemProgram.programId,
       })
       .instruction();
-
     const escrowPda = PublicKey.findProgramAddressSync(
       [Buffer.from('escrow'), new anchor.BN(escrow_id).toArrayLike(Buffer, 'le', 8), new anchor.BN(trade_id).toArrayLike(Buffer, 'le', 8)],
       program.programId
@@ -451,13 +461,20 @@ router.post('/escrows/create', withErrorHandling(async (req: Request, res: Respo
       'UPDATE trades SET leg1_escrow_address = $1 WHERE id = $2 RETURNING id, leg1_escrow_address',
       [escrowPda.toBase58(), trade_id]
     );
+    await query(
+      'INSERT INTO escrows (trade_id, escrow_address, seller_address, buyer_address, token_type, amount, status, sequential) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (escrow_address) DO NOTHING',
+      [trade_id, escrowPda.toBase58(), seller, buyer, 'USDC', amount, 'CREATED', sequential || false]
+    );
     if (updateResult.length === 0) {
       console.error(`Update failed for trade_id: ${trade_id}`);
       res.status(500).json({ error: 'Failed to update trade with escrow address' });
       return;
     }
+    await query(
+      'INSERT INTO escrows (trade_id, escrow_address, seller_address, buyer_address, token_type, amount, status, sequential) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (escrow_address) DO NOTHING',
+      [trade_id, escrowPda.toBase58(), seller, buyer, 'USDC', amount, 'CREATED', sequential || false]
+    );
     console.log(`Updated trade: ${updateResult[0].id}, leg1_escrow_address: ${updateResult[0].leg1_escrow_address}`);
-
     res.json({
       keys: instruction.keys.map((k: anchor.web3.AccountMeta) => ({
         pubkey: k.pubkey.toBase58(),
@@ -474,7 +491,7 @@ router.post('/escrows/create', withErrorHandling(async (req: Request, res: Respo
 
 // Trigger deposit_funds on Solana (requires JWT, no ownership check yet)
 router.post('/escrows/fund', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
-  const { escrow_id, trade_id, seller, seller_token_account, token_mint } = req.body;
+  const { escrow_id, trade_id, seller, seller_token_account, token_mint, amount } = req.body;
   const jwtWalletAddress = getWalletAddressFromJWT(req);
   if (!jwtWalletAddress) {
     res.status(403).json({ error: 'No wallet address in token' });
@@ -482,6 +499,11 @@ router.post('/escrows/fund', withErrorHandling(async (req: Request, res: Respons
   }
   if (seller !== jwtWalletAddress) {
     res.status(403).json({ error: 'Seller must match authenticated user' });
+    return;
+  }
+
+  if (!Number.isInteger(escrow_id) || !Number.isInteger(trade_id) || !Number.isInteger(amount)) {
+    res.status(400).json({ error: 'escrow_id, trade_id, and amount must be integers' });
     return;
   }
   try {

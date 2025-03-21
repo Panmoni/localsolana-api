@@ -112,7 +112,7 @@ router.post('/accounts', withErrorHandling(async (req: Request, res: Response): 
     return;
   }
   if (username && username.length > 25) {
-    res.status(400).json({ error: 'Username must not exceed 50 characters' });
+    res.status(400).json({ error: 'Username must not exceed 25 characters' });
     return;
   }
 

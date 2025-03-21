@@ -175,23 +175,24 @@ router.post('/offers', withErrorHandling(async (req: Request, res: Response): Pr
     res.status(403).json({ error: 'No wallet address in token' });
     return;
   }
-
-  try {
-    // Verify the creator_account_id belongs to the authenticated user
-    const accountCheck = await query('SELECT wallet_address FROM accounts WHERE id = $1', [creator_account_id]);
-    if (accountCheck.length === 0 || accountCheck[0].wallet_address !== jwtWalletAddress) {
-      res.status(403).json({ error: 'Unauthorized: You can only create offers for your own account' });
-      return;
-    }
-
-    const result = await query(
-      'INSERT INTO offers (creator_account_id, offer_type, token, min_amount, max_amount, total_available_amount, rate_adjustment, terms, escrow_deposit_time_limit, fiat_payment_time_limit) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id',
-      [creator_account_id, offer_type, 'USDC', min_amount, min_amount * 2, min_amount * 4, 1.05, 'Cash only', '15 minutes', '30 minutes']
-    );
-    res.status(201).json({ id: result[0].id });
-  } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
+  if (!['BUY', 'SELL'].includes(offer_type)) {
+    res.status(400).json({ error: 'Offer type must be BUY or SELL' });
+    return;
   }
+  if (typeof min_amount !== 'number' || min_amount < 0) {
+    res.status(400).json({ error: 'Min amount must be a non-negative number' });
+    return;
+  }
+  const accountCheck = await query('SELECT wallet_address FROM accounts WHERE id = $1', [creator_account_id]);
+  if (accountCheck.length === 0 || accountCheck[0].wallet_address !== jwtWalletAddress) {
+    res.status(403).json({ error: 'Unauthorized: You can only create offers for your own account' });
+    return;
+  }
+  const result = await query(
+    'INSERT INTO offers (creator_account_id, offer_type, token, min_amount, max_amount, total_available_amount, rate_adjustment, terms, escrow_deposit_time_limit, fiat_payment_time_limit) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id',
+    [creator_account_id, offer_type, 'USDC', min_amount, min_amount * 2, min_amount * 4, 1.05, 'Cash only', '15 minutes', '30 minutes']
+  );
+  res.status(201).json({ id: result[0].id });
 }));
 
 // List offers (publicly accessible)
@@ -372,23 +373,31 @@ router.get('/trades/:id', withErrorHandling(async (req: Request, res: Response):
 // Update trade info (restricted to trade participants)
 router.put('/trades/:id', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
-  const { leg1_state, overall_status } = req.body;
+  const { leg1_state, overall_status, fiat_paid } = req.body;
+
   const jwtWalletAddress = getWalletAddressFromJWT(req);
   if (!jwtWalletAddress) {
     res.status(403).json({ error: 'No wallet address in token' });
     return;
   }
+
   const trade = await query('SELECT * FROM trades WHERE id = $1', [id]);
   if (trade.length === 0) {
     res.status(404).json({ error: 'Trade not found' });
     return;
   }
+
   const offer = await query('SELECT creator_account_id FROM offers WHERE id = $1', [trade[0].leg1_offer_id]);
   const creatorWallet = await query('SELECT wallet_address FROM accounts WHERE id = $1', [offer[0].creator_account_id]);
   if (creatorWallet[0].wallet_address !== jwtWalletAddress) {
     res.status(403).json({ error: 'Unauthorized: Only trade participants can update' });
     return;
   }
+
+  if (fiat_paid) {
+    await query('UPDATE trades SET leg1_fiat_paid_at = NOW() WHERE id = $1', [id]);
+  }
+
   const result = await query(
     'UPDATE trades SET leg1_state = COALESCE($1, leg1_state), overall_status = COALESCE($2, overall_status) WHERE id = $3 RETURNING id',
     [leg1_state, overall_status, id]
@@ -412,6 +421,12 @@ router.post('/escrows/create', withErrorHandling(async (req: Request, res: Respo
   }
 
   try {
+    const tradeCheck = await query('SELECT id FROM trades WHERE id = $1', [trade_id]);
+    if (tradeCheck.length === 0) {
+      res.status(404).json({ error: 'Trade not found' });
+      return;
+    }
+
     const instruction = await program.methods
       .createEscrow(
         new anchor.BN(escrow_id),
@@ -426,6 +441,23 @@ router.post('/escrows/create', withErrorHandling(async (req: Request, res: Respo
         systemProgram: anchor.web3.SystemProgram.programId,
       })
       .instruction();
+
+    const escrowPda = PublicKey.findProgramAddressSync(
+      [Buffer.from('escrow'), new anchor.BN(escrow_id).toArrayLike(Buffer, 'le', 8), new anchor.BN(trade_id).toArrayLike(Buffer, 'le', 8)],
+      program.programId
+    )[0];
+    console.log(`Generated escrowPda: ${escrowPda.toBase58()} for trade_id: ${trade_id}`);
+    const updateResult = await query(
+      'UPDATE trades SET leg1_escrow_address = $1 WHERE id = $2 RETURNING id, leg1_escrow_address',
+      [escrowPda.toBase58(), trade_id]
+    );
+    if (updateResult.length === 0) {
+      console.error(`Update failed for trade_id: ${trade_id}`);
+      res.status(500).json({ error: 'Failed to update trade with escrow address' });
+      return;
+    }
+    console.log(`Updated trade: ${updateResult[0].id}, leg1_escrow_address: ${updateResult[0].leg1_escrow_address}`);
+
     res.json({
       keys: instruction.keys.map((k: anchor.web3.AccountMeta) => ({
         pubkey: k.pubkey.toBase58(),

@@ -1,7 +1,11 @@
 # Notes
 
 ### API
-- README
+- add payment methods now or move to roadmap?
+
+### add pricing server
+
+redis, that new api, etc
 
 ### frontend
 
@@ -71,6 +75,70 @@ No API Dependency: Writes directly to Postgres, allowing the API and frontend to
 Implementation: Use Node.js or Rust with a Postgres client (e.g., pg for Node.js) to process events like:
 FundsDeposited: Update escrows.status to FUNDED and set deposit_timestamp.
 FundsReleased: Update escrows.status to RELEASED and trade leg state to COMPLETED.
+
+### List of Skipped Tests (To Do with Frontend)
+
+1. **Buyer-Side Authorization in `PUT /trades/:id`**
+   - **What**: Allow the buyer (not just the seller) to update trade status (e.g., mark `fiat_paid`).
+   - **Why Skipped**: We updated the code in `routes.ts` to check both seller and buyer wallets, but didn’t test it with a buyer JWT yet since you want to hit it through the frontend.
+   - **Test Plan**:
+     - Generate a JWT for the buyer wallet (`BdRe6PgopWpmdsh6ZNbjwZTeN7i7vx8jLkcqJ6oLVERK`).
+     - Call:
+       ```bash
+       curl -X PUT http://localhost:3000/trades/1 \
+       -H "Authorization: Bearer $(cat buyer_jwt.txt)" \
+       -H "Content-Type: application/json" \
+       -d '{"leg1_state": "FIAT_PAID", "overall_status": "IN_PROGRESS", "fiat_paid": true}' | jq '.'
+       ```
+     - Expect: `{"id": 1}`
+     - Verify: `curl -X GET http://localhost:3000/trades/1 | jq '.leg1_fiat_paid_at'` (should show a timestamp).
+   - **Frontend Need**: Buyer auth flow to generate/use the JWT.
+
+2. **Real Escrow Status Updates (On-Chain)**
+   - **What**: Update `escrows.status` from `"CREATED"` to `"FUNDED"`, `"RELEASED"`, etc., after signing and submitting Solana transactions.
+   - **Why Skipped**: We didn’t mock status updates in `POST /escrows/fund` (you chose to test it for real), and we’re not signing/submitting transactions yet—API just returns instructions.
+   - **Test Plan**:
+     - Call `POST /escrows/create` (already tested, returns instruction).
+     - Sign and submit the instruction via Solana wallet (e.g., Phantom).
+     - Call `POST /escrows/fund`:
+       ```bash
+       curl -X POST http://localhost:3000/escrows/fund \
+       -H "Authorization: Bearer $(cat jwt.txt)" \
+       -H "Content-Type: application/json" \
+       -d '{"escrow_id": 1, "trade_id": 1, "seller": "AczLKrdS6hFGNoTWg9AaS9xhuPfZgVTPxL2W8XzZMDjH", "seller_token_account": "ZapTC6N5ohW1NKYH2w9F5LEjg9kaA3Yxe6wWpEREEic", "token_mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", "amount": 100}'
+       ```
+     - Sign and submit the fund instruction.
+     - Check: `curl -X GET http://localhost:3000/escrows/1 | jq '.status'` (should still be `"CREATED"` until we add on-chain sync).
+   - **Frontend Need**: Wallet integration (e.g., `@solana/wallet-adapter`) to sign/submit, plus a callback to update escrow status in the DB after confirmation.
+
+3. **`POST /escrows/release`, `/escrows/cancel`, `/escrows/dispute`**
+   - **What**: Generate and execute Solana instructions for releasing, canceling, or disputing escrows.
+   - **Why Skipped**: We’ve got the endpoints returning instructions, but haven’t tested signing/submission or their effects (e.g., token transfers, status updates).
+   - **Test Plan**:
+     - **Release**:
+       ```bash
+       curl -X POST http://localhost:3000/escrows/release \
+       -H "Authorization: Bearer $(cat jwt.txt)" \
+       -H "Content-Type: application/json" \
+       -d '{"escrow_id": 1, "trade_id": 1, "authority": "AczLKrdS6hFGNoTWg9AaS9xhuPfZgVTPxL2W8XzZMDjH", "buyer_token_account": "some_buyer_account", "arbitrator_token_account": "some_arbitrator_account"}'
+       ```
+     - **Cancel**:
+       ```bash
+       curl -X POST http://localhost:3000/escrows/cancel \
+       -H "Authorization: Bearer $(cat jwt.txt)" \
+       -H "Content-Type: application/json" \
+       -d '{"escrow_id": 1, "trade_id": 1, "seller": "AczLKrdS6hFGNoTWg9AaS9xhuPfZgVTPxL2W8XzZMDjH", "authority": "AczLKrdS6hFGNoTWg9AaS9xhuPfZgVTPxL2W8XzZMDjH", "seller_token_account": "ZapTC6N5ohW1NKYH2w9F5LEjg9kaA3Yxe6wWpEREEic"}'
+       ```
+     - **Dispute**:
+       ```bash
+       curl -X POST http://localhost:3000/escrows/dispute \
+       -H "Authorization: Bearer $(cat jwt.txt)" \
+       -H "Content-Type: application/json" \
+       -d '{"escrow_id": 1, "trade_id": 1, "disputing_party": "AczLKrdS6hFGNoTWg9AaS9xhuPfZgVTPxL2W8XzZMDjH", "disputing_party_token_account": "ZapTC6N5ohW1NKYH2w9F5LEjg9kaA3Yxe6wWpEREEic", "evidence_hash": "some_hash"}'
+       ```
+     - Sign and submit each instruction.
+     - Verify state changes (e.g., `GET /escrows/1` or on-chain account data).
+   - **Frontend Need**: Wallet signing, UI to trigger these actions, and post-transaction state sync.
 
 
 ## Roadmap

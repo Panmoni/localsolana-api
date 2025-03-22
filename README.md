@@ -19,7 +19,7 @@ A TypeScript-based REST API for a peer-to-peer trading platform on Solana. Handl
 ## Setup
 1. **Clone the Repo**:
    ```bash
-   git clone https://github.com/yourusername/localsolana-api.git
+   git clone https://github.com/Panmoni/localsolana-api.git
    cd localsolana-api
    ```
 
@@ -187,6 +187,10 @@ A TypeScript-based REST API for a peer-to-peer trading platform on Solana. Handl
 ## Contributing
 - Fork, branch, PR—standard Git flow.
 - Keep it clean and test with `curl` or Postman.
+
+## More Information
+
+Visit the primary LocalSolana repo for more information: [https://github.com/Panmoni/localsolana](https://github.com/Panmoni/localsolana)
 
 ## License
 MIT

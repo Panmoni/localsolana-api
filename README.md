@@ -190,7 +190,7 @@ A TypeScript-based REST API for a peer-to-peer trading platform on Solana. Handl
 
 ## More Information
 
-Visit the primary LocalSolana repo for more information: [https://github.com/Panmoni/localsolana](https://github.com/Panmoni/localsolana)
+Visit the primary LocalSolana repo for more information: [https://github.com/Panmoni/localsolana](https://github.com/Panmoni/localsolana).
 
 ## License
 MIT

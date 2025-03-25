@@ -1,5 +1,6 @@
 import express, { Request, Response, NextFunction } from 'express';
 import * as dotenv from 'dotenv';
+import cors from 'cors';
 import routes from './routes';
 import jwt from 'jsonwebtoken';
 import jwksClient from 'jwks-rsa';
@@ -7,6 +8,17 @@ import jwksClient from 'jwks-rsa';
 dotenv.config();
 
 const app = express();
+
+// CORS Configuration
+const corsOptions = {
+  origin: process.env.NODE_ENV === 'production'
+    ? process.env.CORS_ORIGIN_PROD || 'https://yourdomain.com'
+    : process.env.CORS_ORIGIN_DEV || 'http://localhost:3000',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // JWT Verification Middleware

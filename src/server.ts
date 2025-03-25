@@ -12,7 +12,7 @@ const app = express();
 // CORS Configuration
 const corsOptions = {
   origin: process.env.NODE_ENV === 'production'
-    ? process.env.CORS_ORIGIN_PROD || 'https://yourdomain.com'
+    ? process.env.CORS_ORIGIN_PROD || 'https://app.localsolana.com'
     : process.env.CORS_ORIGIN_DEV || 'http://localhost:3000',
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']

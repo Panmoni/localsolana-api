@@ -2,8 +2,19 @@ import express, { Request, Response, Router, NextFunction } from 'express';
 import { query } from './db';
 import { program, PublicKey } from './solana';
 import * as anchor from '@coral-xyz/anchor';
+import { requestLogger, logError } from './logger';
 
 const router: Router = express.Router();
+
+// Logger must be first middleware to catch all requests
+router.use((req, res, next) => {
+  try {
+    requestLogger(req, res, next);
+  } catch (err) {
+    console.error('Logger failed:', err);
+    next();
+  }
+});
 
 // Middleware to require JWT
 const requireJWT = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -16,10 +27,6 @@ const requireJWT = async (req: Request, res: Response, next: NextFunction): Prom
 };
 
 router.use(requireJWT);
-
-const logError = (message: string, error: unknown) => {
-  console.error(`[${new Date().toISOString()}] ${message}:`, error);
-};
 
 const withErrorHandling = (handler: (req: Request, res: Response) => Promise<void>) => {
   return async (req: Request, res: Response) => {
@@ -153,11 +160,45 @@ router.get('/accounts/:id', withErrorHandling(async (req: Request, res: Response
 // Update account info (restricted to owner)
 router.put('/accounts/:id', restrictToOwner('account', 'id'), withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const { id } = req.params;
-  const { username, email } = req.body;
+  const {
+    username,
+    email,
+    telegram_username,
+    telegram_id,
+    profile_photo_url,
+    phone_country_code,
+    phone_number,
+    available_from,
+    available_to,
+    timezone
+  } = req.body;
   try {
     const result = await query(
-      'UPDATE accounts SET username = COALESCE($1, username), email = COALESCE($2, email) WHERE id = $3 RETURNING id',
-      [username || null, email || null, id]
+      `UPDATE accounts SET
+        username = COALESCE($1, username),
+        email = COALESCE($2, email),
+        telegram_username = COALESCE($3, telegram_username),
+        telegram_id = COALESCE($4, telegram_id),
+        profile_photo_url = COALESCE($5, profile_photo_url),
+        phone_country_code = COALESCE($6, phone_country_code),
+        phone_number = COALESCE($7, phone_number),
+        available_from = COALESCE($8, available_from),
+        available_to = COALESCE($9, available_to),
+        timezone = COALESCE($10, timezone)
+      WHERE id = $11 RETURNING id`,
+      [
+        username || null,
+        email || null,
+        telegram_username || null,
+        telegram_id || null,
+        profile_photo_url || null,
+        phone_country_code || null,
+        phone_number || null,
+        available_from || null,
+        available_to || null,
+        timezone || null,
+        id
+      ]
     );
     if (result.length === 0) {
       res.status(404).json({ error: 'Account not found' });

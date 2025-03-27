@@ -71,10 +71,10 @@ const withErrorHandling = (handler: (req: Request, res: Response) => Promise<voi
   };
 };
 
-// Helper to get wallet address from verified JWT (Dynamic.xyz format)
+// Helper to get wallet address from JWT
 const getWalletAddressFromJWT = (req: Request): string | undefined => {
-  // Dynamic.xyz stores the wallet address in the 'sub' claim of the JWT
-  return req.user?.sub;
+  const credentials = req.user?.verified_credentials;
+  return credentials?.find((cred: any) => cred.format === 'blockchain')?.address;
 };
 
 // Middleware to check ownership
@@ -211,9 +211,17 @@ router.post('/accounts', withErrorHandling(async (req: Request, res: Response): 
 // Get account details for authenticated user
 router.get('/accounts/me', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   const walletAddress = getWalletAddressFromJWT(req);
-  const result = await query('SELECT * FROM accounts WHERE wallet_address = $1', [walletAddress]);
+  console.log('Searching for account with wallet:', walletAddress);
+  const result = await query(
+    'SELECT * FROM accounts WHERE LOWER(wallet_address) = LOWER($1)',
+    [walletAddress]
+  );
   if (result.length === 0) {
-    res.status(404).json({ error: 'Account not found' });
+    console.error('No account found for wallet:', walletAddress);
+    res.status(404).json({
+      error: 'Account not found',
+      detail: `No account registered for wallet ${walletAddress}`
+    });
     return;
   }
   res.json(result[0]);

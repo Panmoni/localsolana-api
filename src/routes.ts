@@ -298,7 +298,7 @@ router.put('/accounts/:id', restrictToOwner('account', 'id'), withErrorHandling(
 // 2. Offers Endpoints
 // Create a new offer (restricted to creator’s account)
 router.post('/offers', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
-  const { creator_account_id, offer_type, min_amount } = req.body;
+  const { creator_account_id, offer_type, min_amount, fiat_currency = 'USD' } = req.body;
   const jwtWalletAddress = getWalletAddressFromJWT(req);
   if (!jwtWalletAddress) {
     res.status(403).json({ error: 'No wallet address in token' });
@@ -306,6 +306,10 @@ router.post('/offers', withErrorHandling(async (req: Request, res: Response): Pr
   }
   if (!['BUY', 'SELL'].includes(offer_type)) {
     res.status(400).json({ error: 'Offer type must be BUY or SELL' });
+    return;
+  }
+  if (!/^[A-Z]{3}$/.test(fiat_currency)) {
+    res.status(400).json({ error: 'Fiat currency must be a 3-letter uppercase code' });
     return;
   }
   if (typeof min_amount !== 'number' || min_amount < 0) {
@@ -323,11 +327,12 @@ router.post('/offers', withErrorHandling(async (req: Request, res: Response): Pr
     return;
   }
   const result = await query(
-    'INSERT INTO offers (creator_account_id, offer_type, token, min_amount, max_amount, total_available_amount, rate_adjustment, terms, escrow_deposit_time_limit, fiat_payment_time_limit) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id',
+    'INSERT INTO offers (creator_account_id, offer_type, token, fiat_currency, min_amount, max_amount, total_available_amount, rate_adjustment, terms, escrow_deposit_time_limit, fiat_payment_time_limit) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id',
     [
       creator_account_id,
       offer_type,
       req.body.token || 'USDC',
+      fiat_currency,
       min_amount,
       req.body.max_amount || min_amount * 2,
       req.body.total_available_amount || min_amount * 4,
@@ -440,8 +445,8 @@ router.post(
         leg1_offer_id,
         leg2_offer_id || null,
         "IN_PROGRESS",
-        from_fiat_currency || "USD",
-        destination_fiat_currency || "USD",
+        from_fiat_currency || leg1Offer[0].fiat_currency,
+        destination_fiat_currency || leg1Offer[0].fiat_currency,
         from_bank || null,
         destination_bank || null,
         "CREATED",
@@ -449,7 +454,7 @@ router.post(
         leg1BuyerAccountId,
         leg1Offer[0].token,
         leg1Offer[0].min_amount,
-        "USD",
+        leg1Offer[0].fiat_currency,
       ]
     );
     await query(

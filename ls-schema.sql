@@ -29,6 +29,7 @@ CREATE TABLE offers (
     creator_account_id INTEGER NOT NULL REFERENCES accounts(id),
     offer_type VARCHAR(4) NOT NULL CHECK (offer_type IN ('BUY', 'SELL')),
     token VARCHAR(10) NOT NULL DEFAULT 'USDC',
+    fiat_currency VARCHAR(3) NOT NULL DEFAULT 'USD',
     min_amount DECIMAL(15,2) NOT NULL,
     max_amount DECIMAL(15,2) NOT NULL CHECK (max_amount >= min_amount),
     total_available_amount DECIMAL(15,2) NOT NULL CHECK (total_available_amount >= max_amount),

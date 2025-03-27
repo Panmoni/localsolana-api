@@ -3,6 +3,28 @@ import { query } from './db';
 import { program, PublicKey } from './solana';
 import * as anchor from '@coral-xyz/anchor';
 import { requestLogger, logError } from './logger';
+import jwt from 'jsonwebtoken';
+import jwksClient from 'jwks-rsa';
+
+// JWT Verification Setup
+const client = jwksClient({
+  jwksUri: 'https://app.dynamic.xyz/api/v0/sdk/20c1c15c-2ea4-4917-bb3c-2abd455c71ee/.well-known/jwks',
+  rateLimit: true,
+  cache: true,
+  cacheMaxEntries: 5,
+  cacheMaxAge: 600000, // 10 minutes
+});
+
+function getKey(header: jwt.JwtHeader, callback: jwt.SigningKeyCallback) {
+  client.getSigningKey(header.kid, (err, key) => {
+    if (err) {
+      callback(err);
+    } else {
+      const signingKey = key?.getPublicKey();
+      callback(null, signingKey);
+    }
+  });
+}
 
 const router: Router = express.Router();
 
@@ -16,17 +38,22 @@ router.use((req, res, next) => {
   }
 });
 
-// Middleware to require JWT
-const requireJWT = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-  const jwtWalletAddress = getWalletAddressFromJWT(req);
-  if (!jwtWalletAddress) {
-    res.status(403).json({ error: 'Authentication required' });
+// Secure JWT Verification Middleware
+const requireJWT = (req: Request, res: Response, next: NextFunction): void => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) {
+    res.status(401).json({ error: 'No token provided' });
     return;
   }
-  next();
+  jwt.verify(token, getKey, { algorithms: ['RS256'] }, (err, decoded) => {
+    if (err) {
+      res.status(401).json({ error: 'Invalid token' });
+      return;
+    }
+    req.user = decoded as jwt.JwtPayload;
+    next();
+  });
 };
-
-router.use(requireJWT);
 
 const withErrorHandling = (handler: (req: Request, res: Response) => Promise<void>) => {
   return async (req: Request, res: Response) => {
@@ -44,10 +71,10 @@ const withErrorHandling = (handler: (req: Request, res: Response) => Promise<voi
   };
 };
 
-// Helper to get wallet address from JWT
+// Helper to get wallet address from verified JWT (Dynamic.xyz format)
 const getWalletAddressFromJWT = (req: Request): string | undefined => {
-  const credentials = req.user?.verified_credentials;
-  return credentials?.find((cred: any) => cred.format === 'blockchain')?.address;
+  // Dynamic.xyz stores the wallet address in the 'sub' claim of the JWT
+  return req.user?.sub;
 };
 
 // Middleware to check ownership
@@ -103,6 +130,56 @@ const restrictToOwner = (
     }
   };
 };
+
+// PUBLIC ROUTES
+// List offers (publicly accessible but can filter by owner if authenticated)
+router.get('/offers', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
+  const { type, token, owner } = req.query;
+  try {
+    let sql = 'SELECT * FROM offers WHERE 1=1';
+    const params: string[] = [];
+
+    if (type) {
+      sql += ' AND offer_type = $' + (params.length + 1);
+      params.push(type as string);
+    }
+    if (token) {
+      sql += ' AND token = $' + (params.length + 1);
+      params.push(token as string);
+    }
+
+    // If authenticated and requesting own offers
+    const walletAddress = getWalletAddressFromJWT(req);
+    if (owner === 'me' && walletAddress) {
+      sql += ' AND creator_account_id IN (SELECT id FROM accounts WHERE wallet_address = $' + (params.length + 1) + ')';
+      params.push(walletAddress);
+    }
+
+    const result = await query(sql, params);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+}));
+
+// Get offer details (publicly accessible)
+router.get('/offers/:id', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
+  const { id } = req.params;
+  try {
+    const result = await query('SELECT * FROM offers WHERE id = $1', [id]);
+    if (result.length === 0) {
+      res.status(404).json({ error: 'Offer not found' });
+      return;
+    }
+    res.json(result[0]);
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+}));
+
+// PRIVATE ROUTES
+// PRIVATE ROUTES - Require JWT
+router.use(requireJWT);
 
 // 1. Accounts Endpoints
 // Create a new account
@@ -244,41 +321,9 @@ router.post('/offers', withErrorHandling(async (req: Request, res: Response): Pr
   res.status(201).json({ id: result[0].id });
 }));
 
-// List offers (publicly accessible)
-router.get('/offers', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
-  const { type, token } = req.query;
-  try {
-    let sql = 'SELECT * FROM offers WHERE 1=1';
-    const params: string[] = [];
-    if (type) {
-      sql += ' AND offer_type = $' + (params.length + 1);
-      params.push(type as string);
-    }
-    if (token) {
-      sql += ' AND token = $' + (params.length + 1);
-      params.push(token as string);
-    }
-    const result = await query(sql, params);
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
-  }
-}));
-
-// Get offer details (publicly accessible)
-router.get('/offers/:id', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
-  const { id } = req.params;
-  try {
-    const result = await query('SELECT * FROM offers WHERE id = $1', [id]);
-    if (result.length === 0) {
-      res.status(404).json({ error: 'Offer not found' });
-      return;
-    }
-    res.json(result[0]);
-  } catch (err) {
-    res.status(500).json({ error: (err as Error).message });
-  }
-}));
+// MOVED ABOVE JWT CHECK
+// List offers
+// Get offer details
 
 // Update an offer (restricted to creator)
 router.put('/offers/:id', restrictToOwner('offer', 'id'), withErrorHandling(async (req: Request, res: Response): Promise<void> => {

@@ -324,7 +324,18 @@ router.post('/offers', withErrorHandling(async (req: Request, res: Response): Pr
   }
   const result = await query(
     'INSERT INTO offers (creator_account_id, offer_type, token, min_amount, max_amount, total_available_amount, rate_adjustment, terms, escrow_deposit_time_limit, fiat_payment_time_limit) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id',
-    [creator_account_id, offer_type, 'USDC', min_amount, min_amount * 2, min_amount * 4, 1.05, 'Cash only', '15 minutes', '30 minutes']
+    [
+      creator_account_id,
+      offer_type,
+      req.body.token || 'USDC',
+      min_amount,
+      req.body.max_amount || min_amount * 2,
+      req.body.total_available_amount || min_amount * 4,
+      req.body.rate_adjustment || 1.05,
+      req.body.terms || 'Cash only',
+      '15 minutes',
+      '30 minutes'
+    ]
   );
   res.status(201).json({ id: result[0].id });
 }));

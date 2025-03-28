@@ -354,9 +354,52 @@ router.put('/offers/:id', restrictToOwner('offer', 'id'), withErrorHandling(asyn
   const { id } = req.params;
   const { min_amount } = req.body;
   try {
+    const {
+      min_amount,
+      max_amount,
+      total_available_amount,
+      rate_adjustment,
+      terms,
+      escrow_deposit_time_limit,
+      fiat_payment_time_limit,
+      fiat_currency,
+      offer_type,
+      token
+    } = req.body;
+
+    // Format time limits as PostgreSQL interval strings
+    const formatTimeLimit = (limit: any) => {
+      if (!limit) return null;
+      if (typeof limit === 'string') return limit;
+      if (limit.minutes) return `${limit.minutes} minutes`;
+      return null;
+    };
+
     const result = await query(
-      'UPDATE offers SET min_amount = COALESCE($1, min_amount) WHERE id = $2 RETURNING id',
-      [min_amount || null, id]
+      `UPDATE offers SET
+        min_amount = COALESCE($1, min_amount),
+        max_amount = COALESCE($2, max_amount),
+        total_available_amount = COALESCE($3, total_available_amount),
+        rate_adjustment = COALESCE($4, rate_adjustment),
+        terms = COALESCE($5, terms),
+        escrow_deposit_time_limit = COALESCE($6::interval, escrow_deposit_time_limit),
+        fiat_payment_time_limit = COALESCE($7::interval, fiat_payment_time_limit),
+        fiat_currency = COALESCE($8, fiat_currency),
+        offer_type = COALESCE($9, offer_type)
+      WHERE id = $10 RETURNING id`,
+      [
+        min_amount || null,
+        max_amount || null,
+        total_available_amount || null,
+        rate_adjustment || null,
+        terms || null,
+        formatTimeLimit(escrow_deposit_time_limit),
+        formatTimeLimit(fiat_payment_time_limit),
+        fiat_currency || null,
+        offer_type || null,
+        token || null,
+        id
+      ]
     );
     if (result.length === 0) {
       res.status(404).json({ error: 'Offer not found' });

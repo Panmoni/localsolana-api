@@ -33,7 +33,7 @@ CREATE TABLE offers (
     min_amount DECIMAL(15,2) NOT NULL,
     max_amount DECIMAL(15,2) NOT NULL CHECK (max_amount >= min_amount),
     total_available_amount DECIMAL(15,2) NOT NULL CHECK (total_available_amount >= max_amount),
-    rate_adjustment DECIMAL(5,2) NOT NULL,
+    rate_adjustment DECIMAL(6,4) NOT NULL,
     terms TEXT,
     escrow_deposit_time_limit INTERVAL NOT NULL,
     fiat_payment_time_limit INTERVAL NOT NULL,

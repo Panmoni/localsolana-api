@@ -133,6 +133,7 @@ const restrictToOwner = (
 };
 
 // PUBLIC ROUTES
+// TODO: rate limiting or otherwise locking it down
 router.get('/prices', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
   try {
     const pricingServerUrl = process.env.PRICING_SERVER_URL;

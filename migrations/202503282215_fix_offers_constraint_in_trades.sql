@@ -1,0 +1,3 @@
+-- This is a no-op migration as the changes are in the TypeScript code, not in the database schema.
+-- The actual changes are made in src/routes.ts to handle the offers_total_available_amount_check constraint
+-- when updating the total_available_amount in the /trades endpoint.

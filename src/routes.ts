@@ -468,6 +468,7 @@ router.post(
     const {
       leg1_offer_id,
       leg2_offer_id,
+      leg1_crypto_amount,
       from_fiat_currency,
       destination_fiat_currency,
       from_bank,
@@ -530,13 +531,13 @@ router.post(
         leg1SellerAccountId,
         leg1BuyerAccountId,
         leg1Offer[0].token,
-        leg1Offer[0].min_amount,
+        leg1_crypto_amount || leg1Offer[0].min_amount,
         leg1Offer[0].fiat_currency,
       ]
     );
     await query(
     'UPDATE offers SET total_available_amount = total_available_amount - $1 WHERE id = $2',
-    [leg1Offer[0].min_amount, leg1_offer_id]
+    [leg1_crypto_amount || leg1Offer[0].min_amount, leg1_offer_id]
   );
       res.status(201).json({ id: result[0].id });
     })

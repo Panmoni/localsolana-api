@@ -637,8 +637,12 @@ router.post('/escrows/create', withErrorHandling(async (req: Request, res: Respo
     res.status(403).json({ error: 'Seller must match authenticated user' });
     return;
   }
-  if (!Number.isInteger(escrow_id) || !Number.isInteger(trade_id) || !Number.isInteger(amount)) {
-    res.status(400).json({ error: 'escrow_id, trade_id, and amount must be integers' });
+  if (!Number.isInteger(escrow_id) || !Number.isInteger(trade_id)) {
+    res.status(400).json({ error: 'escrow_id and trade_id must be integers' });
+    return;
+  }
+  if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
+    res.status(400).json({ error: 'amount must be a positive number' });
     return;
   }
   try {
@@ -647,11 +651,14 @@ router.post('/escrows/create', withErrorHandling(async (req: Request, res: Respo
       res.status(404).json({ error: 'Trade not found' });
       return;
     }
+    // Convert decimal amount to integer representation (multiply by 10^2 for 2 decimal places)
+    const amountInteger = Math.round(amount * 100);
+
     const instruction = await program.methods
       .createEscrow(
         new anchor.BN(escrow_id),
         new anchor.BN(trade_id),
-        new anchor.BN(amount),
+        new anchor.BN(amountInteger),
         sequential || false,
         sequential_escrow_address ? new PublicKey(sequential_escrow_address) : null
       )
@@ -707,8 +714,12 @@ router.post('/escrows/fund', withErrorHandling(async (req: Request, res: Respons
     return;
   }
 
-  if (!Number.isInteger(escrow_id) || !Number.isInteger(trade_id) || !Number.isInteger(amount)) {
-    res.status(400).json({ error: 'escrow_id, trade_id, and amount must be integers' });
+  if (!Number.isInteger(escrow_id) || !Number.isInteger(trade_id)) {
+    res.status(400).json({ error: 'escrow_id and trade_id must be integers' });
+    return;
+  }
+  if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
+    res.status(400).json({ error: 'amount must be a positive number' });
     return;
   }
   try {
@@ -781,6 +792,11 @@ router.post('/escrows/release', withErrorHandling(async (req: Request, res: Resp
     return;
   }
 
+  if (!Number.isInteger(escrow_id) || !Number.isInteger(trade_id)) {
+    res.status(400).json({ error: 'escrow_id and trade_id must be integers' });
+    return;
+  }
+
   try {
     const escrowPda = PublicKey.findProgramAddressSync(
       [Buffer.from('escrow'), new anchor.BN(escrow_id).toArrayLike(Buffer, 'le', 8), new anchor.BN(trade_id).toArrayLike(Buffer, 'le', 8)],
@@ -829,6 +845,11 @@ router.post('/escrows/cancel', withErrorHandling(async (req: Request, res: Respo
     return;
   }
 
+  if (!Number.isInteger(escrow_id) || !Number.isInteger(trade_id)) {
+    res.status(400).json({ error: 'escrow_id and trade_id must be integers' });
+    return;
+  }
+
   try {
     const escrowPda = PublicKey.findProgramAddressSync(
       [Buffer.from('escrow'), new anchor.BN(escrow_id).toArrayLike(Buffer, 'le', 8), new anchor.BN(trade_id).toArrayLike(Buffer, 'le', 8)],
@@ -873,6 +894,11 @@ router.post('/escrows/dispute', withErrorHandling(async (req: Request, res: Resp
   }
   if (disputing_party !== jwtWalletAddress) {
     res.status(403).json({ error: 'Disputing party must match authenticated user' });
+    return;
+  }
+
+  if (!Number.isInteger(escrow_id) || !Number.isInteger(trade_id)) {
+    res.status(400).json({ error: 'escrow_id and trade_id must be integers' });
     return;
   }
 

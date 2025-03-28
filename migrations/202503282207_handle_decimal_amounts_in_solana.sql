@@ -1,0 +1,2 @@
+-- This is a no-op migration as the changes are in the TypeScript code, not in the database schema.
+-- The actual changes are made in src/routes.ts to handle decimal amounts properly when interacting with Solana.

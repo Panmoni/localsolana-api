@@ -538,19 +538,34 @@ router.post(
       ]
     );
     // Calculate the new total_available_amount
-    const amountToSubtract = leg1_crypto_amount || leg1Offer[0].min_amount;
-    const newTotalAvailable = parseFloat(leg1Offer[0].total_available_amount) - parseFloat(amountToSubtract);
+    const amountToSubtract = parseFloat(leg1_crypto_amount || leg1Offer[0].min_amount);
+    const newTotalAvailable = parseFloat(leg1Offer[0].total_available_amount) - amountToSubtract;
     const maxAmount = parseFloat(leg1Offer[0].max_amount);
+    const minAmount = parseFloat(leg1Offer[0].min_amount);
+
+    // Check if the trade would make the available amount negative
+    if (newTotalAvailable < 0) {
+      res.status(400).json({ error: 'Insufficient available amount for this trade' });
+      return;
+    }
 
     // Check if the new total would violate the constraint
     if (newTotalAvailable < maxAmount) {
-      // Option 1: Update both total_available_amount and max_amount
-      await query(
-        'UPDATE offers SET total_available_amount = $1, max_amount = $1 WHERE id = $2',
-        [newTotalAvailable, leg1_offer_id]
-      );
+      // If new total would be less than min_amount, update all three values
+      if (newTotalAvailable < minAmount) {
+        await query(
+          'UPDATE offers SET total_available_amount = $1, max_amount = $1, min_amount = $1 WHERE id = $2',
+          [newTotalAvailable, leg1_offer_id]
+        );
+      } else {
+        // Otherwise just update total_available_amount and max_amount
+        await query(
+          'UPDATE offers SET total_available_amount = $1, max_amount = $1 WHERE id = $2',
+          [newTotalAvailable, leg1_offer_id]
+        );
+      }
     } else {
-      // Option 2: Just update total_available_amount
+      // Just update total_available_amount
       await query(
         'UPDATE offers SET total_available_amount = total_available_amount - $1 WHERE id = $2',
         [amountToSubtract, leg1_offer_id]
@@ -663,15 +678,31 @@ router.post('/escrows/create', withErrorHandling(async (req: Request, res: Respo
     res.status(400).json({ error: 'amount must be a positive number' });
     return;
   }
-// Validate buyer is a valid public key
+// Check if buyer is a valid public key or an account ID
 try {
-  // Check if buyer is a valid public key
+  let buyerPublicKey;
+
+  // Try to parse as a public key
   try {
-    new PublicKey(buyer);
+    buyerPublicKey = new PublicKey(buyer);
   } catch (err) {
-    res.status(400).json({ error: 'buyer must be a valid Solana public key' });
-    return;
+    // If not a valid public key, check if it's an account ID
+    if (!isNaN(parseInt(buyer))) {
+      // Look up the wallet address for this account ID
+      const buyerAccount = await query('SELECT wallet_address FROM accounts WHERE id = $1', [buyer]);
+      if (buyerAccount.length === 0) {
+        res.status(400).json({ error: 'Buyer account not found' });
+        return;
+      }
+      buyerPublicKey = new PublicKey(buyerAccount[0].wallet_address);
+    } else {
+      res.status(400).json({ error: 'buyer must be a valid Solana public key or account ID' });
+      return;
+    }
   }
+
+  // Replace the buyer parameter with the public key
+  req.body.buyer = buyerPublicKey.toBase58();
 
   // Validate sequential parameters
   if (sequential === true && !sequential_escrow_address) {

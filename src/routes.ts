@@ -508,6 +508,18 @@ router.post(
       return;
     }
 
+    // Calculate the new total_available_amount
+    const amountToSubtract = parseFloat(leg1_crypto_amount || leg1Offer[0].min_amount);
+    const newTotalAvailable = parseFloat(leg1Offer[0].total_available_amount) - amountToSubtract;
+    const maxAmount = parseFloat(leg1Offer[0].max_amount);
+    const minAmount = parseFloat(leg1Offer[0].min_amount);
+
+    // Check if the trade would make the available amount negative
+    if (newTotalAvailable < 0) {
+      res.status(400).json({ error: 'Insufficient available amount for this trade' });
+      return;
+    }
+
     const isSeller = leg1Offer[0].offer_type === "SELL";
     const leg1SellerAccountId = isSeller
       ? creatorAccount[0].id
@@ -537,17 +549,6 @@ router.post(
         leg1Offer[0].fiat_currency,
       ]
     );
-    // Calculate the new total_available_amount
-    const amountToSubtract = parseFloat(leg1_crypto_amount || leg1Offer[0].min_amount);
-    const newTotalAvailable = parseFloat(leg1Offer[0].total_available_amount) - amountToSubtract;
-    const maxAmount = parseFloat(leg1Offer[0].max_amount);
-    const minAmount = parseFloat(leg1Offer[0].min_amount);
-
-    // Check if the trade would make the available amount negative
-    if (newTotalAvailable < 0) {
-      res.status(400).json({ error: 'Insufficient available amount for this trade' });
-      return;
-    }
 
     // Check if the new total would violate the constraint
     if (newTotalAvailable < maxAmount) {

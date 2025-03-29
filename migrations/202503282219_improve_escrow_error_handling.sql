@@ -1,0 +1,6 @@
+-- This is a no-op migration as the changes are in the TypeScript code, not in the database schema.
+-- The actual changes are made in src/routes.ts to improve error handling and validation in the /escrows/create endpoint:
+-- 1. Added validation for buyer parameter to ensure it's a valid Solana public key
+-- 2. Added validation for sequential parameters
+-- 3. Added detailed error logging
+-- 4. Added try-catch blocks around critical operations to better identify where errors occur

@@ -420,7 +420,8 @@ router.put('/offers/:id', restrictToOwner('offer', 'id'), withErrorHandling(asyn
         fiat_payment_time_limit = COALESCE($7::interval, fiat_payment_time_limit),
         fiat_currency = COALESCE($8, fiat_currency),
         offer_type = COALESCE($9, offer_type),
-        token = COALESCE($10, token)
+        token = COALESCE($10, token),
+        updated_at = NOW()
       WHERE id = $11 RETURNING id`,
       [
         min_amount || null,

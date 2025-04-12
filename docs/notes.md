@@ -1,5 +1,13 @@
 # LocalSolana API Repo Notes
 
+
+## Moving chain logic to frontend?
+- routes.ts constracts tx instructions
+- solana.ts
+- package.json
+
+Decide how much to move out of the API... this stuff frankly seems ok tho.
+
 ## Ref
 ### API
 #### create account

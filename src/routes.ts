@@ -1,9 +1,7 @@
 import express, { Request, Response, Router, NextFunction } from 'express';
 import { query } from './db';
-import { program, PublicKey, connection } from './solana';
+import { program, PublicKey } from './solana';
 import * as anchor from '@coral-xyz/anchor';
-import { Transaction, TransactionInstruction } from '@solana/web3.js';
-import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import { requestLogger, logError } from './logger';
 import jwt from 'jsonwebtoken';
 import jwksClient from 'jwks-rsa';
@@ -665,10 +663,8 @@ router.put('/trades/:id', withErrorHandling(async (req: Request, res: Response):
 // 4. Escrows Endpoints
 // Trigger create_escrow on Solana (requires JWT, no ownership check yet)
 router.post('/escrows/create', withErrorHandling(async (req: Request, res: Response): Promise<void> => {
-  const { trade_id, escrow_id, seller, buyer, amount, sequential, sequential_escrow_address, seller_token_account } = req.body;
+  const { trade_id, escrow_id, seller, buyer, amount, sequential, sequential_escrow_address } = req.body;
   const jwtWalletAddress = getWalletAddressFromJWT(req);
-
-  // Validation
   if (!jwtWalletAddress) {
     res.status(403).json({ error: 'No wallet address in token' });
     return;
@@ -685,20 +681,17 @@ router.post('/escrows/create', withErrorHandling(async (req: Request, res: Respo
     res.status(400).json({ error: 'amount must be a positive number' });
     return;
   }
-  if (!seller_token_account) {
-    res.status(400).json({ error: 'seller_token_account is required' });
-    return;
-  }
-
-  // Hardcode USDC mint for now
-  const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
-
-  // Validate buyer (public key or account ID)
+// Check if buyer is a valid public key or an account ID
+try {
   let buyerPublicKey;
+
+  // Try to parse as a public key
   try {
     buyerPublicKey = new PublicKey(buyer);
   } catch (err) {
+    // If not a valid public key, check if it's an account ID
     if (!isNaN(parseInt(buyer))) {
+      // Look up the wallet address for this account ID
       const buyerAccount = await query('SELECT wallet_address FROM accounts WHERE id = $1', [buyer]);
       if (buyerAccount.length === 0) {
         res.status(400).json({ error: 'Buyer account not found' });
@@ -711,11 +704,15 @@ router.post('/escrows/create', withErrorHandling(async (req: Request, res: Respo
     }
   }
 
+  // Replace the buyer parameter with the public key
+  req.body.buyer = buyerPublicKey.toBase58();
+
   // Validate sequential parameters
   if (sequential === true && !sequential_escrow_address) {
     res.status(400).json({ error: 'sequential_escrow_address must be provided when sequential is true' });
     return;
   }
+
   if (sequential_escrow_address) {
     try {
       new PublicKey(sequential_escrow_address);
@@ -725,86 +722,113 @@ router.post('/escrows/create', withErrorHandling(async (req: Request, res: Respo
     }
   }
 
-  // Validate trade exists
-  const tradeCheck = await query('SELECT id FROM trades WHERE id = $1', [trade_id]);
-  if (tradeCheck.length === 0) {
-    res.status(404).json({ error: 'Trade not found' });
-    return;
+
+    const tradeCheck = await query('SELECT id FROM trades WHERE id = $1', [trade_id]);
+    if (tradeCheck.length === 0) {
+      res.status(404).json({ error: 'Trade not found' });
+      return;
+    }
+    // Convert decimal amount to integer representation (multiply by 10^2 for 2 decimal places)
+    const amountInteger = Math.round(amount * 100);
+    console.log(`Converting amount ${amount} to integer representation: ${amountInteger}`);
+
+    // Log parameters being passed to Solana contract
+    console.log('Solana contract parameters:', {
+      escrow_id,
+      trade_id,
+      amountInteger,
+      sequential: sequential || false,
+      sequential_escrow_address: sequential_escrow_address ? sequential_escrow_address : null
+    });
+
+    let instruction;
+    try {
+      instruction = await program.methods
+        .createEscrow(
+          new anchor.BN(escrow_id),
+          new anchor.BN(trade_id),
+          new anchor.BN(amountInteger),
+          sequential || false,
+          sequential_escrow_address ? new PublicKey(sequential_escrow_address) : null
+        )
+        .accountsPartial({
+          seller: new PublicKey(seller),
+          buyer: new PublicKey(buyer),
+          systemProgram: anchor.web3.SystemProgram.programId,
+        })
+        .instruction();
+      console.log('Successfully created Solana instruction');
+    } catch (instructionErr) {
+      console.error('Error creating Solana instruction:', instructionErr);
+      res.status(500).json({
+        error: (instructionErr as Error).message,
+        stack: (instructionErr as Error).stack,
+        details: 'Error occurred while creating Solana instruction'
+      });
+      return;
+    }
+    let escrowPda;
+    try {
+      escrowPda = PublicKey.findProgramAddressSync(
+        [Buffer.from('escrow'), new anchor.BN(escrow_id).toArrayLike(Buffer, 'le', 8), new anchor.BN(trade_id).toArrayLike(Buffer, 'le', 8)],
+        program.programId
+      )[0];
+      console.log(`Generated escrowPda: ${escrowPda.toBase58()} for trade_id: ${trade_id}`);
+    } catch (pdaErr) {
+      console.error('Error generating escrow PDA:', pdaErr);
+      res.status(500).json({
+        error: (pdaErr as Error).message,
+        stack: (pdaErr as Error).stack,
+        details: 'Error occurred while generating escrow PDA'
+      });
+      return;
+    }
+
+    let updateResult;
+    try {
+      updateResult = await query(
+        'UPDATE trades SET leg1_escrow_address = $1 WHERE id = $2 RETURNING id, leg1_escrow_address',
+        [escrowPda.toBase58(), trade_id]
+      );
+
+      await query(
+        'INSERT INTO escrows (trade_id, escrow_address, seller_address, buyer_address, token_type, amount, status, sequential) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (escrow_address) DO NOTHING',
+        [trade_id, escrowPda.toBase58(), seller, buyer, 'USDC', amount, 'CREATED', sequential || false]
+      );
+
+      if (updateResult.length === 0) {
+        console.error(`Update failed for trade_id: ${trade_id}`);
+        res.status(500).json({ error: 'Failed to update trade with escrow address' });
+        return;
+      }
+      console.log(`Updated trade: ${updateResult[0].id}, leg1_escrow_address: ${updateResult[0].leg1_escrow_address}`);
+    } catch (dbErr) {
+      console.error('Error in database operations:', dbErr);
+      res.status(500).json({
+        error: (dbErr as Error).message,
+        stack: (dbErr as Error).stack,
+        details: 'Error occurred during database operations'
+      });
+      return;
+    }
+    res.json({
+      keys: instruction.keys.map((k: anchor.web3.AccountMeta) => ({
+        pubkey: k.pubkey.toBase58(),
+        isSigner: k.isSigner,
+        isWritable: k.isWritable,
+      })),
+      programId: instruction.programId.toBase58(),
+      data: instruction.data.toString('base64'),
+    });
+  } catch (err) {
+    console.error('Error in /escrows/create:', err);
+    const error = err as Error;
+    res.status(500).json({
+      error: error.message,
+      stack: error.stack,
+      details: 'Error occurred while creating escrow'
+    });
   }
-
-  // Convert amount to integer (6 decimals for USDC)
-  const amountInteger = Math.round(amount * 1_000_000); // USDC has 6 decimals
-
-  // Generate PDAs
-  const escrowPda = PublicKey.findProgramAddressSync(
-    [Buffer.from('escrow'), new anchor.BN(escrow_id).toArrayLike(Buffer, 'le', 8), new anchor.BN(trade_id).toArrayLike(Buffer, 'le', 8)],
-    program.programId
-  )[0];
-  const escrowTokenPda = PublicKey.findProgramAddressSync(
-    [Buffer.from('escrow_token'), escrowPda.toBuffer()],
-    program.programId
-  )[0];
-
-  // Create transaction
-  const transaction = new Transaction();
-
-  // Add create_escrow instruction
-  const createInstruction = await program.methods
-    .createEscrow(
-      new anchor.BN(escrow_id),
-      new anchor.BN(trade_id),
-      new anchor.BN(amountInteger),
-      sequential || false,
-      sequential_escrow_address ? new PublicKey(sequential_escrow_address) : null
-    )
-    .accountsPartial({
-      seller: new PublicKey(seller),
-      buyer: buyerPublicKey,
-      escrow: escrowPda,
-      systemProgram: anchor.web3.SystemProgram.programId,
-    })
-    .instruction();
-
-  // Add fund_escrow instruction
-  const fundInstruction = await program.methods
-    .fundEscrow()
-    .accountsPartial({
-      seller: new PublicKey(seller),
-      escrow: escrowPda,
-      sellerTokenAccount: new PublicKey(seller_token_account),
-      escrowTokenAccount: escrowTokenPda,
-      tokenMint: USDC_MINT,
-      tokenProgram: TOKEN_PROGRAM_ID,
-      systemProgram: anchor.web3.SystemProgram.programId,
-      rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-    })
-    .instruction();
-
-  transaction.add(createInstruction, fundInstruction);
-
-  // Set recent blockhash and fee payer
-  const { blockhash } = await connection.getLatestBlockhash();
-  transaction.recentBlockhash = blockhash;
-  transaction.feePayer = new PublicKey(seller);
-
-  // Serialize transaction (unsigned)
-  const serializedTx = transaction.serialize({ requireAllSignatures: false }).toString('base64');
-
-  // Return for frontend signing
-  res.json({
-    transaction: serializedTx,
-    escrow_address: escrowPda.toBase58(),
-  });
-
-  // Optimistic database update
-  await query(
-    'UPDATE trades SET leg1_escrow_address = $1 WHERE id = $2',
-    [escrowPda.toBase58(), trade_id]
-  );
-  await query(
-    'INSERT INTO escrows (trade_id, escrow_address, seller_address, buyer_address, token_type, amount, status, sequential) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (escrow_address) DO NOTHING',
-    [trade_id, escrowPda.toBase58(), seller, buyerPublicKey.toBase58(), 'USDC', amount, 'FUNDED', sequential || false]
-  );
 }));
 
 // Trigger deposit_funds on Solana (requires JWT, no ownership check yet)
